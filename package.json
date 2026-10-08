@@ -1,0 +1,17 @@
+{
+  "name": "adb-onetwo",
+  "version": "0.20.1",
+  "private": true,
+  "description": "Farm Manager: local USB controller for a rack of Android phones",
+  "main": "app/boot.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "icons": "electron tools/make-icons.js",
+    "release": "node tools/release.js"
+  },
+  "devDependencies": {
+    "electron": "^44.5.1"
+  },
+  "updateUrl": "https://raw.githubusercontent.com/Florentino-coder/onetwo-letsgo/main/updates/"
+}

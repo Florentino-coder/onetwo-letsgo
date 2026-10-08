@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+farm_manager_config.json
+farm_manager_devices.json
+farm_manager_events.sqlite3
+farm_manager_events.sqlite3-*
+apk-library/*.apk
+apk-library/**/*.apk
+backups/*.zip
+node-snapshots/*.json
+dashboard/*.json
+node_modules/
+captures/
+farm_manager_events.jsonl
+*.tmp
+update-private.pem
+installed-updates/

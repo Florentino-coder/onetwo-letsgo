@@ -1,0 +1,26 @@
+{
+  "node_id": "",
+  "node_name": "Local Node",
+  "adb_path": "",
+  "scrcpy_path": "",
+  "apk_library_dir": "",
+  "auto_scan_enabled": false,
+  "auto_scan_interval_seconds": 15,
+  "auto_restart_adb": true,
+  "thumbnail_interval_seconds": 8,
+  "low_battery_percent": 20,
+  "high_temp_c": 42.0,
+  "setup_timeout_minutes": 30,
+  "setup_brightness": 120,
+  "scrcpy_profile": "Balanced",
+  "scrcpy_override_profiles": false,
+  "live_watchdog_enabled": true,
+  "last_live_serials": [],
+  "workflow_confirm_each_step": false,
+  "workflow_dry_run": false,
+  "scrcpy": {
+    "max_size": 1024,
+    "max_fps": 30,
+    "bit_rate": "2M"
+  }
+}
