@@ -1,8 +1,9 @@
 {
   "name": "adb-onetwo",
+  "productName": "ADB-OneTwo",
   "version": "0.20.1",
   "private": true,
-  "description": "Farm Manager: local USB controller for a rack of Android phones",
+  "description": "ADB-OneTwo: local USB controller for a rack of Android phones",
   "main": "app/boot.js",
   "scripts": {
     "start": "electron .",

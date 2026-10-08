@@ -11,7 +11,7 @@ const { Store } = require('./core/store');
 const logic = require('./core/logic');
 const { checkForUpdate } = require('./updater');
 
-const APP_NAME = 'Farm Manager';
+const APP_NAME = 'ADB-OneTwo';
 const DEVICE_PARALLELISM = 4;
 const THUMBNAIL_WIDTH = 300;
 const LOG_MEMORY = 500;

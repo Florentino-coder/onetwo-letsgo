@@ -12,7 +12,7 @@ const dataDir = process.env.FARM_DATA_DIR
   || (app.isPackaged ? app.getPath('userData') : path.join(__dirname, '..'));
 process.env.FARM_DATA_DIR = dataDir;
 // Installed copies only: with this ID a development run shows the Electron icon on the taskbar.
-if (app.isPackaged) app.setAppUserModelId('com.farmmanager.app');
+if (app.isPackaged) app.setAppUserModelId('com.adbonetwo.app');
 
 const installed = require('../package.json').version;
 const updatesDir = path.join(dataDir, 'installed-updates');

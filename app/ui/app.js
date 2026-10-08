@@ -249,7 +249,7 @@ function renderHeader() {
   $('header').replaceChildren(
     h('img', { class: 'logo', src: 'logo.svg', alt: '', draggable: false }),
     h('div', { class: 'brand' },
-      h('h1', null, 'Farm Manager'),
+      h('h1', null, 'ADB-OneTwo'),
       h('div', { class: 'status' }, h('span', { class: `dot ${S.scanning ? 'busy' : online ? 'on' : ''}` }), status)),
     h('div', { class: 'spacer' }),
     S.update.status === 'updated' && h('button', { class: 'btn update', onclick: restartForUpdate },
