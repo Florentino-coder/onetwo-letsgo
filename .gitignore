@@ -15,3 +15,6 @@ farm_manager_events.jsonl
 *.tmp
 update-private.pem
 installed-updates/
+withdraw_audit.jsonl
+withdraw_ledger.json
+withdraw_ledger.json.tmp

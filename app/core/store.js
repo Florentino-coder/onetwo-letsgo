@@ -41,7 +41,7 @@ class Store {
     this.eventFile = path.join(baseDir, EVENT_LOG_NAME);
     this.config = readJson(this.configFile, {});
     this.state = readJson(this.stateFile, {});
-    for (const key of ['devices', 'workflows', 'policies', 'group_live_profiles']) {
+    for (const key of ['devices', 'workflows', 'points', 'pick_sets', 'policies', 'group_live_profiles']) {
       if (!this.state[key] || typeof this.state[key] !== 'object') this.state[key] = {};
     }
   }

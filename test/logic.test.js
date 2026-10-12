@@ -69,11 +69,167 @@ test('parseWorkflow accepts valid steps and reports the failing line', () => {
   const steps = logic.parseWorkflow('# comment\nwake\nwait 500\nopen com.android.settings\ntext hello there\nkeyevent KEYCODE_ENTER\nscreenshot\n');
   assert.deepEqual(steps.map((step) => step.command), ['wake', 'wait', 'open', 'text', 'keyevent', 'screenshot']);
   assert.equal(steps[3].argument, 'hello there');
+  assert.equal(steps[0].note, 'comment');
+  assert.equal(steps[1].note, '');
+  assert.deepEqual(logic.parseWorkflow('# open the chat\n\ntap 50% 30%\nhome').map((step) => step.note), ['open the chat', '']);
   assert.throws(() => logic.parseWorkflow('wake\nfly away'), /Line 2: unknown command 'fly'/);
   assert.throws(() => logic.parseWorkflow('wait soon'), /Line 1: wait expects milliseconds/);
   assert.throws(() => logic.parseWorkflow('open notapackage'), /Line 1: open expects a package name/);
   assert.throws(() => logic.parseWorkflow('home now'), /does not take an argument/);
   assert.throws(() => logic.parseWorkflow('\n# only comments\n'), /Workflow is empty/);
+});
+
+test('tap and swipe take screen percentages', () => {
+  const steps = logic.parseWorkflow('tap 50% 30.5%\nswipe 50% 80% 50% 20%\nswipe 10% 50% 90% 50% 1200\n');
+  assert.deepEqual(steps.map((step) => step.command), ['tap', 'swipe', 'swipe']);
+  assert.deepEqual(logic.parseGesture('tap', '50% 30.5%'), { points: [50, 30.5], pixel: false });
+  assert.deepEqual(logic.parseGesture('swipe', '50% 80% 50% 20%'), { points: [50, 80, 50, 20], pixel: false, duration: 300 });
+  assert.equal(logic.parseGesture('swipe', '10% 50% 90% 50% 1200').duration, 1200);
+  assert.deepEqual(logic.parseGesture('tap', '540 960'), { points: [540, 960], pixel: true });
+  assert.deepEqual(logic.parseGesture('swipe', '540 1800 540 600 400'), { points: [540, 1800, 540, 600], pixel: true, duration: 400 });
+  assert.doesNotThrow(() => logic.parseWorkflow('tap 540 960\nswipe 540 1800 540 600'));
+  assert.throws(() => logic.parseWorkflow('tap 540 30%'), /Line 1: tap expects a position/);
+  assert.throws(() => logic.parseWorkflow('tap 54.5 960'), /Line 1: tap expects a position/);
+  assert.throws(() => logic.parseWorkflow('tap ? 960'), /Line 1: tap expects a position/);
+  assert.throws(() => logic.parseWorkflow('tap 50% 101%'), /Line 1: tap expects a position/);
+  assert.throws(() => logic.parseWorkflow('tap 50% 30% 20%'), /Line 1: tap expects a position/);
+  assert.throws(() => logic.parseWorkflow('wake\nswipe 50% 80%'), /Line 2: swipe expects two positions/);
+  assert.throws(() => logic.parseWorkflow('swipe 50% 80% 50% 20% fast'), /Line 1: swipe expects two positions/);
+});
+
+test('gesturePixels and parseScreenSize map percentages onto the screen', () => {
+  const size = { width: 720, height: 1600 };
+  assert.deepEqual(logic.gesturePixels([50, 25], size), [360, 400]);
+  assert.deepEqual(logic.gesturePixels([0, 0, 100, 100], size), [0, 0, 719, 1599]);
+  assert.deepEqual(logic.parseScreenSize('  init=720x1600 320dpi cur=1600x720 app=1600x664'), { width: 1600, height: 720 });
+  assert.deepEqual(logic.parseScreenSize('Physical size: 1080x2400\nOverride size: 720x1600'), { width: 720, height: 1600 });
+  assert.deepEqual(logic.parseScreenSize('Physical size: 1080x2400'), { width: 1080, height: 2400 });
+  assert.equal(logic.parseScreenSize('error: closed'), null);
+});
+
+test('TouchRecorder turns getevent lines into workflow lines', () => {
+  const devices = logic.parseTouchDevices([
+    'add device 2: /dev/input/event4',
+    '  name:     "mtk-pmic-keys"',
+    '    KEY (0001): KEY_VOLUMEDOWN        KEY_POWER',
+    'add device 7: /dev/input/event6',
+    '  name:     "gcore"',
+    '    ABS (0003): ABS_MT_SLOT           : value 0, min 0, max 9, fuzz 0, flat 0, resolution 0',
+    '                ABS_MT_POSITION_X     : value 0, min 0, max 719, fuzz 0, flat 0, resolution 0',
+    '                ABS_MT_POSITION_Y     : value 0, min 0, max 1599, fuzz 0, flat 0, resolution 0',
+  ].join('\n'));
+  assert.deepEqual(devices, [{ path: '/dev/input/event6', maxX: 719, maxY: 1599 }]);
+
+  const recorder = new logic.TouchRecorder(devices);
+  const hex = (value) => value.toString(16).padStart(8, '0');
+  const touch = (at, code, value) => `[${at.toFixed(6).padStart(15)}] /dev/input/event6: ${code.startsWith('SYN') ? 'EV_SYN' : code.startsWith('BTN') ? 'EV_KEY' : 'EV_ABS'}       ${code.padEnd(20)} ${value}`;
+  const feed = (lines) => lines.flatMap((line) => recorder.push(line));
+  const press = (at, x, y) => [touch(at, 'ABS_MT_TRACKING_ID', hex(5)), touch(at, 'BTN_TOUCH', 'DOWN'), touch(at, 'ABS_MT_POSITION_X', hex(x)), touch(at, 'ABS_MT_POSITION_Y', hex(y)), touch(at, 'SYN_REPORT', hex(0))];
+  const lift = (at) => [touch(at, 'ABS_MT_TRACKING_ID', 'ffffffff'), touch(at, 'BTN_TOUCH', 'UP'), touch(at, 'SYN_REPORT', hex(0))];
+
+  // A quick tap in the middle: no wait before the first step.
+  assert.deepEqual(feed([...press(100, 360, 800), ...lift(100.08)]), ['tap 50.1% 50%']);
+  // A drag up, 1.5 s later.
+  assert.deepEqual(feed([
+    ...press(101.58, 360, 1280),
+    touch(101.7, 'ABS_MT_POSITION_Y', hex(800)), touch(101.7, 'SYN_REPORT', hex(0)),
+    touch(101.88, 'ABS_MT_POSITION_Y', hex(320)), touch(101.88, 'SYN_REPORT', hex(0)),
+    ...lift(101.88),
+  ]), ['wait 1500', 'swipe 50.1% 80.1% 50.1% 20% 300']);
+  // A press held in place is a long press. X did not change, so the panel sends only Y.
+  assert.deepEqual(feed([
+    touch(103, 'ABS_MT_TRACKING_ID', hex(6)), touch(103, 'ABS_MT_POSITION_Y', hex(400)), touch(103, 'SYN_REPORT', hex(0)),
+    ...lift(103.9),
+  ]), ['wait 1100', 'swipe 50.1% 25% 50.1% 25% 900']);
+  // Two thumbs typing: the second key goes down before the first is lifted, and both are kept.
+  assert.deepEqual(feed([
+    ...press(104, 180, 1200),
+    touch(104.05, 'ABS_MT_SLOT', hex(1)), touch(104.05, 'ABS_MT_TRACKING_ID', hex(7)), touch(104.05, 'ABS_MT_POSITION_X', hex(540)), touch(104.05, 'ABS_MT_POSITION_Y', hex(1200)), touch(104.05, 'SYN_REPORT', hex(0)),
+    touch(104.1, 'ABS_MT_SLOT', hex(0)), ...lift(104.1),
+    touch(104.2, 'ABS_MT_SLOT', hex(1)), ...lift(104.2),
+    touch(104.2, 'ABS_MT_SLOT', hex(0)),
+  ]), ['wait 100', 'tap 25% 75%', 'wait 100', 'tap 75.1% 75%']);
+  // A hardware key is recorded, other devices are not.
+  assert.deepEqual(recorder.push('[     105.900000] /dev/input/event4: EV_KEY       KEY_POWER            DOWN'), ['wait 1700', 'keyevent KEYCODE_POWER']);
+  assert.deepEqual(recorder.push('[     106.000000] /dev/input/event2: EV_ABS       ABS_DISTANCE         00000001'), []);
+  assert.deepEqual(recorder.push('garbage'), []);
+  // Every recorded line is a valid workflow line.
+  assert.doesNotThrow(() => logic.parseWorkflow('tap 50.1% 50%\nwait 1500\nswipe 50.1% 80.1% 50.1% 20% 300\nswipe 50.1% 25% 50.1% 25% 900\nkeyevent KEYCODE_POWER'));
+});
+
+test('fillWorkflow puts values into text steps only', () => {
+  const steps = logic.parseWorkflow('tap 50% 30%\ntext {1}\ntap 50% 40%\ntext {2}\ntext ref {1}-{2}\nwait 500');
+  assert.equal(logic.workflowInputs(steps), 2);
+  assert.equal(logic.workflowInputs(logic.parseWorkflow('home\ntext hello')), 0);
+  assert.deepEqual(logic.fillWorkflow(steps, ['1234567890', 250]).map((step) => step.argument), ['50% 30%', '1234567890', '50% 40%', '250', 'ref 1234567890-250', '500']);
+  assert.throws(() => logic.fillWorkflow(steps, ['1234567890']), /Step 4 needs value \{2\}/);
+  assert.throws(() => logic.fillWorkflow(steps, ['1', '']), /Step 4 needs value \{2\}/);
+  assert.throws(() => logic.fillWorkflow(steps, ['1\nopen com.android.settings', '2']), /one line/);
+  assert.throws(() => logic.fillWorkflow(steps, ['x'.repeat(201), '2']), /at most 200/);
+  // A value is typed as it is, never read as a command.
+  const filled = logic.fillWorkflow(steps, ['open com.android.settings', '{1}']);
+  assert.deepEqual(filled.map((step) => step.command), ['tap', 'text', 'tap', 'text', 'text', 'wait']);
+  assert.equal(filled[3].argument, '{1}');
+});
+
+test('cleanNumber takes the value out of page text', () => {
+  assert.equal(logic.cleanNumber('เลขบัญชีธนาคาร : 0531586115'), '0531586115');
+  assert.equal(logic.cleanNumber('3,001.00THB'), '3001.00');
+  assert.equal(logic.cleanNumber('จำนวนเงิน :\n3,001.00THB'), '3001.00');
+  assert.equal(logic.cleanNumber('Account 053-1-58611-5'), '0531586115');
+  assert.equal(logic.cleanNumber('ช่อง 2: 1,250,000'), '1250000');
+  assert.equal(logic.cleanNumber('0531586115'), '0531586115');
+  assert.equal(logic.cleanNumber('250'), '250');
+  assert.equal(logic.cleanNumber('ไม่มีตัวเลข'), '');
+  assert.equal(logic.cleanNumber(''), '');
+});
+
+test('wholeNumber drops a zero fraction and refuses any other', () => {
+  assert.equal(logic.wholeNumber('3001.00'), '3001');
+  assert.equal(logic.wholeNumber('3001.0'), '3001');
+  assert.equal(logic.wholeNumber('3001'), '3001');
+  assert.equal(logic.wholeNumber('0531586115'), '0531586115');
+  assert.equal(logic.wholeNumber(''), '');
+  assert.equal(logic.wholeNumber(logic.cleanNumber('จำนวนเงิน : 3,001.00THB')), '3001');
+  assert.throws(() => logic.wholeNumber('3001.50'), /3001\.50 has a fraction/);
+  assert.throws(() => logic.wholeNumber('0.01'), /has a fraction/);
+});
+
+test('verifyScreen checks the phone screen against the job', () => {
+  const slip = logic.parseUiText('<node text="โอนเงินสำเร็จ" content-desc="" /><node text="ไปยัง" /><node text="053-1-xxx11-5" /><node text="จำนวนเงิน" /><node text="3,001.00 บาท" /><node text="ค่าธรรมเนียม 0.00 &amp; อื่นๆ" content-desc="ปิด" />');
+  assert.equal(slip, 'โอนเงินสำเร็จ\nไปยัง\n053-1-xxx11-5\nจำนวนเงิน\n3,001.00 บาท\nค่าธรรมเนียม 0.00 & อื่นๆ\nปิด');
+  assert.deepEqual(logic.verifyScreen(slip, ['0531586115', '3001'], 'สำเร็จ'), []);
+  assert.deepEqual(logic.verifyScreen(slip, ['0531586115', '3001'], ''), []);
+  // A different amount, account or a missing success message each fail.
+  assert.deepEqual(logic.verifyScreen(slip, ['0531586115', '3000'], 'สำเร็จ'), ['value 3000']);
+  assert.deepEqual(logic.verifyScreen(slip, ['0531586125', '3001'], 'สำเร็จ'), ['value 0531586125']);
+  assert.deepEqual(logic.verifyScreen(slip, ['0531586115', '3001'], 'รายการสำเร็จแล้ว'), ['"รายการสำเร็จแล้ว"']);
+  assert.deepEqual(logic.verifyScreen('', ['0531586115', '3001'], 'สำเร็จ'), ['value 0531586115', 'value 3001', '"สำเร็จ"']);
+  // An amount is compared as a number: 3001 is not shown by 13,001.00 or 3,001.50.
+  assert.ok(logic.screenShows('ยอด 3,001.00 บาท', '3001'));
+  assert.ok(logic.screenShows('ยอด 3001 บาท', '3001.00'));
+  assert.ok(!logic.screenShows('ยอด 13,001.00 บาท', '3001'));
+  assert.ok(!logic.screenShows('ยอด 3,001.50 บาท', '3001'));
+  // Account numbers: in full, with dashes, or partly hidden. Fully hidden proves nothing.
+  assert.ok(logic.screenShows('บัญชี 053-1-58611-5', '0531586115'));
+  assert.ok(logic.screenShows('บัญชี XXX-X-X8611-X', '0531586115'));
+  assert.ok(!logic.screenShows('บัญชี XXX-X-XXXX1-5', '0531586115'));
+  assert.ok(!logic.screenShows('บัญชี xxx-x-x8612-x', '0531586115'));
+  assert.ok(!logic.screenShows('อะไรก็ได้', ''));
+  // Text read from a picture can put two numbers on one line, or spaces inside one.
+  assert.ok(logic.screenShows('053-1-58611-5 3,001.00', '3001'));
+  assert.ok(logic.screenShows('053-1-58611-5 3,001.00', '0531586115'));
+  assert.ok(logic.screenShows('053 1 58611 5', '0531586115'));
+});
+
+test('parseImageList keeps new pictures, newest first', () => {
+  const output = '1791492000|/sdcard/DCIM/Camera/old.jpg\r\n1791492700|/sdcard/Pictures/Bualuang mBanking/slip 2.JPG\n1791492650|/sdcard/Pictures/Bualuang mBanking/slip 1.png\nfind: /sdcard/Download: No such file\n1791492800|/sdcard/Download/notes.txt\n';
+  assert.deepEqual(logic.parseImageList(output, 1791492600), [
+    { at: 1791492700, path: '/sdcard/Pictures/Bualuang mBanking/slip 2.JPG' },
+    { at: 1791492650, path: '/sdcard/Pictures/Bualuang mBanking/slip 1.png' },
+  ]);
+  assert.equal(logic.parseImageList(output).length, 3);
+  assert.deepEqual(logic.parseImageList('', 0), []);
 });
 
 test('checkPolicy enforces mode and capture rules', () => {
@@ -100,4 +256,212 @@ test('mapLimit keeps order and respects the limit', async () => {
   assert.deepEqual(results, [60, 20, 40, 10, 30]);
   assert.equal(peak, 2);
   assert.deepEqual(await logic.mapLimit([], 3, async () => 1), []);
+});
+
+test('verifyScreen matches Thai typed with one mark against recognized text with two', () => {
+  assert.deepEqual(logic.verifyScreen('รายการสํา เร็จ\n739.00', ['739'], 'รายการสำเร็จ'), []);
+  assert.deepEqual(logic.verifyScreen('739.00', ['739'], 'รายการสำเร็จ'), ['"รายการสำเร็จ"']);
+});
+
+test('parseSlip reads payer, paid side and amount from a slip with the amount on top', () => {
+  const text = [
+    '@ Bangkok Bank', 'รายการสําเร็จ', '08 ต.ค. 69, 06:58', 'จํานวนเงิน', '739.00 tHe',
+    '9     นาย ทดสอบ', '324-0-xxx718', 'ธนาคารกรุงเทพ',
+    '๑   นาย ผู้รับ ทดสอบ', '020-1-xxxxx8-76', 'ธนาคารเพื่อการเกษตรและ',
+    'ค่าธรรมเนียม 0.00 THB', 'หมายเลขอ้างอิง', '202610080658123456', 'เลขที่อ้างอิง', '123456789012',
+  ].join('\n');
+  assert.deepEqual(logic.parseSlip(text), {
+    amount: '739.00',
+    sender_account_masked: '3240xxx718', sender_account_last4: '', bank: 'BBL', bank_name_th: 'ธนาคารกรุงเทพ',
+    receiver_account_masked: '0201xxxxx876', receiver_account_last4: '', receiver_bank: 'BAAC', receiver_bank_name_th: 'ธนาคารเพื่อการเกษตรและสหกรณ์การเกษตร',
+  });
+});
+
+test('parseSlip reads a slip that names the bank before the account', () => {
+  const text = ['K+', 'โอนเงินสำเร็จ', 'นาย ทดสอบ', 'ธ.กสิกรไทย', 'xxx-x-x0758-x', 'นาง ผู้รับ', 'ธ.ไทยพาณิชย์', 'xxx-xxx747-6', 'จำนวน:', '1,067.00 บาท', 'ค่าธรรมเนียม:', '0.00 บาท'].join('\n');
+  const slip = logic.parseSlip(text);
+  assert.equal(slip.amount, '1067.00');
+  assert.equal(slip.sender_account_masked, 'xxxxx0758x');
+  assert.equal(slip.bank, 'KBANK');
+  assert.equal(slip.receiver_account_masked, 'xxxxxx7476');
+  assert.equal(slip.receiver_account_last4, '7476');
+  assert.equal(slip.receiver_bank, 'SCB');
+});
+
+test('parseSlip gives no accounts when it cannot tell payer from paid', () => {
+  assert.equal(logic.parseSlip('739.00\n324-0-xxx718').sender_account_masked, '');
+  assert.equal(logic.parseSlip('').amount, '');
+});
+
+test('expandWorkflow puts the saved workflow a run step names in its place', () => {
+  const saved = { 'bank-KBANK': '# pick KBank\ntap 30% 40%\n', 'Bank-SCB': 'swipe 50% 75% 50% 25%\ntap 30% 60%\n', loop: 'run loop\n', outer: 'run bank-{3}\ntext {1}\n' };
+  const main = logic.parseWorkflow('open com.bank.app\nrun bank-{3}\ntext {1}\nrun outer');
+  assert.equal(logic.workflowInputs(main), 3);
+  assert.deepEqual(
+    logic.expandWorkflow(main, ['739', '0201', 'KBANK'], saved).map((step) => `${step.command} ${step.argument}`),
+    ['open com.bank.app', 'tap 30% 40%', 'text 739', 'tap 30% 40%', 'text 739'],
+  );
+  // The name is matched without regard to letter case or spaces.
+  assert.equal(logic.expandWorkflow(main, ['739', '0201', ' scb '], saved).length, 7);
+  assert.throws(() => logic.expandWorkflow(main, ['739', '0201', 'TTB'], saved), /no saved workflow named 'bank-TTB'/);
+  assert.throws(() => logic.expandWorkflow(main, ['739', '0201'], saved), /needs value \{3\}/);
+  assert.throws(() => logic.expandWorkflow(logic.parseWorkflow('run loop'), [], saved), /runs itself/);
+  assert.throws(() => logic.expandWorkflow(logic.parseWorkflow('run toString'), [], saved), /no saved workflow/);
+  assert.throws(() => logic.parseWorkflow('run'), /run expects the name/);
+});
+
+test('expandWorkflow turns a pick step into scrolls and a tap from the position set', () => {
+  const sets = {
+    banks: {
+      scroll: '50% 70% 50% 35% 1500',
+      items: { 'ธนาคารกสิกรไทย': { page: 0, at: '17% 30%' }, 'ธ.ก.ส.': { page: 2, at: '50% 42%' }, broken: { page: 0, at: 'nowhere' } },
+    },
+  };
+  const main = logic.parseWorkflow('open com.bank.app\npick banks {3}\ntext {1}');
+  assert.equal(logic.workflowInputs(main), 3);
+  const lines = (values) => logic.expandWorkflow(main, values, {}, sets).map((step) => `${step.command} ${step.argument}`);
+  assert.deepEqual(lines(['739', '', 'ธนาคาร กสิกรไทย']), ['open com.bank.app', 'tap 17% 30%', 'text 739']);
+  assert.deepEqual(lines(['739', '', 'ธ.ก.ส.']), [
+    'open com.bank.app', 'swipe 50% 70% 50% 35% 1500', 'wait 700', 'swipe 50% 70% 50% 35% 1500', 'wait 700', 'tap 50% 42%', 'text 739',
+  ]);
+  assert.throws(() => lines(['739', '', 'ธนาคารออมสิน']), /Position set 'banks' has no position for 'ธนาคารออมสิน', or more than one/);
+  assert.throws(() => lines(['739', '', 'broken']), /has no position for 'broken'/);
+  assert.throws(() => lines(['739']), /needs value \{3\}/);
+  assert.throws(() => logic.expandWorkflow(logic.parseWorkflow('pick cards {1}'), ['a'], {}, sets), /no position set named 'cards'/);
+  assert.throws(() => logic.expandWorkflow(logic.parseWorkflow('pick banks {1}'), ['a'], {}, undefined), /no position set named 'banks'/);
+  assert.throws(() => logic.parseWorkflow('pick banks'), /pick expects a position set and a name/);
+  assert.equal(logic.normalizePickSet({ scroll: 'bad' }).scroll, logic.DEFAULT_PICK_SCROLL);
+});
+
+test('findPick matches a name, its other spellings, and a bank under any of its names', () => {
+  const set = logic.normalizePickSet({
+    items: {
+      KBANK: { page: 0, at: '17% 30%' },
+      'ไทยพาณิชย์': { page: 0, at: '50% 30%' },
+      TMW: { page: 1, at: '83% 30%', also: ['ทรูมันนี่ วอลเล็ท', ' TrueMoney '] },
+    },
+  });
+  assert.equal(logic.findPick(set, 'kbank'), 'KBANK');
+  assert.equal(logic.findPick(set, 'ธนาคารกสิกรไทย'), 'KBANK');
+  assert.equal(logic.findPick(set, 'SCB'), 'ไทยพาณิชย์');
+  assert.equal(logic.findPick(set, 'ทรูมันนี่วอลเล็ท'), 'TMW');
+  assert.equal(logic.findPick(set, 'truemoney'), 'TMW');
+  // A bank the set does not have, and a word that is no bank, find nothing.
+  assert.equal(logic.findPick(set, 'ธนาคารกรุงเทพ'), '');
+  assert.equal(logic.findPick(set, 'อะไรก็ไม่รู้'), '');
+  // Two positions for one bank cannot be told apart, so neither is taken.
+  const twice = logic.normalizePickSet({ items: { KBANK: { page: 0, at: '17% 30%' }, 'กสิกร': { page: 0, at: '50% 30%' } } });
+  assert.equal(logic.findPick(twice, 'ธนาคารกสิกรไทย'), '');
+  assert.equal(logic.findPick(twice, 'กสิกร'), 'กสิกร');
+});
+
+test('findPick knows every bank of a full list by its short name and its Thai name', () => {
+  const short = ['BBL', 'Kbank', 'KTB', 'TTB', 'SCB', 'CIMBT', 'UOBT', 'BAY', 'GSB', 'LHBANK', 'KKP', 'TISCO', 'BAAC', 'CITI', 'GHB', 'ICBC', 'TCRB', 'SCBT', 'HSBC', 'SMBC', 'MHCB', 'ISBT', 'DBBK', 'BOC', 'IOBA', 'BNPP', 'SME', 'JPMC'];
+  const set = logic.normalizePickSet({ items: Object.fromEntries(short.map((name, index) => [name, { page: 0, at: `${index + 1}% 30%` }])) });
+  const thai = {
+    'ธนาคารกรุงเทพ': 'BBL', 'ธนาคารกสิกรไทย': 'Kbank', 'ธนาคารกรุงไทย': 'KTB', 'ธนาคารทหารไทยธนชาต': 'TTB', 'ธนาคารไทยพาณิชย์': 'SCB',
+    'ธนาคารซีไอเอ็มบี ไทย': 'CIMBT', 'ธนาคารยูโอบี': 'UOBT', 'ธนาคารกรุงศรีอยุธยา': 'BAY', 'ธนาคารออมสิน': 'GSB', 'ธนาคารแลนด์ แอนด์ เฮ้าส์': 'LHBANK',
+    'ธนาคารเกียรตินาคินภัทร': 'KKP', 'ธนาคารทิสโก้': 'TISCO', 'ธนาคารเพื่อการเกษตรและสหกรณ์การเกษตร': 'BAAC', 'ธนาคารซิตี้แบงก์': 'CITI',
+    'ธนาคารอาคารสงเคราะห์': 'GHB', 'ธนาคารไอซีบีซี (ไทย)': 'ICBC', 'ธนาคารไทยเครดิต': 'TCRB', 'ธนาคารสแตนดาร์ดชาร์เตอร์ด (ไทย)': 'SCBT',
+    'ธนาคารฮ่องกงและเซี่ยงไฮ้': 'HSBC', 'ธนาคารซูมิโตโม มิตซุย': 'SMBC', 'ธนาคารมิซูโฮ': 'MHCB', 'ธนาคารอิสลามแห่งประเทศไทย': 'ISBT',
+    'ธนาคารดอยซ์แบงก์': 'DBBK', 'ธนาคารแห่งประเทศจีน': 'BOC', 'ธนาคารอินเดียนโอเวอร์ซีส์': 'IOBA', 'ธนาคารบีเอ็นพี พารีบาส์': 'BNPP',
+    'ธนาคารพัฒนาวิสาหกิจขนาดกลางและขนาดย่อม': 'SME', 'ธนาคารเจพีมอร์แกน เชส': 'JPMC',
+  };
+  assert.equal(Object.keys(thai).length, short.length);
+  for (const [name, wanted] of Object.entries(thai)) assert.equal(logic.findPick(set, name), wanted, name);
+  for (const name of short) assert.equal(logic.findPick(set, name.toUpperCase()), name, name);
+});
+
+test('expandWorkflow turns a pin step into one secret tap per digit of the phone PIN', () => {
+  const sets = { keypad: { items: { 1: { page: 0, at: '15% 58%' }, 2: { page: 0, at: '50% 58%' }, 3: { page: 0, at: '85% 58%' }, 4: { page: 0, at: '15% 68%' } } } };
+  const main = logic.parseWorkflow('open com.bank.app\npin keypad\ntext {1}');
+  assert.equal(logic.workflowInputs(main), 1);
+  const steps = logic.expandWorkflow(main, ['739'], {}, sets, '1231');
+  assert.deepEqual(steps.map((step) => `${step.command} ${step.argument}`), [
+    'open com.bank.app', 'tap 15% 58%', 'wait 800', 'tap 50% 58%', 'wait 800', 'tap 85% 58%', 'wait 800', 'tap 15% 58%', 'text 739',
+  ]);
+  // Nothing about a PIN step says which key it is.
+  const taps = steps.filter((step) => step.secret);
+  assert.equal(taps.length, 4);
+  assert.ok(taps.every((step) => step.note === 'PIN'));
+  assert.equal(logic.expandWorkflow(logic.parseWorkflow('pin keypad 250'), [], {}, sets, '1234')[1].argument, '250');
+  // A workflow run from another reaches the same PIN.
+  assert.equal(logic.expandWorkflow(logic.parseWorkflow('run unlock'), [], { unlock: 'pin keypad\n' }, sets, '4321').length, 7);
+  assert.throws(() => logic.expandWorkflow(main, ['739'], {}, sets, ''), /No PIN is set for this phone/);
+  assert.throws(() => logic.expandWorkflow(main, ['739'], {}, sets, undefined), /No PIN is set for this phone/);
+  assert.throws(() => logic.expandWorkflow(main, ['739'], {}, sets, '12a4'), /No PIN is set for this phone/);
+  assert.throws(() => logic.expandWorkflow(main, ['739'], {}, {}, '1234'), /no position set named 'keypad'/);
+  const short = () => logic.expandWorkflow(main, ['739'], {}, sets, '1239');
+  assert.throws(short, /does not have every digit/);
+  // The error, which is logged, does not name the digit.
+  assert.throws(short, (error) => !/9/.test(error.message));
+  assert.throws(() => logic.parseWorkflow('pin'), /pin expects the keypad/);
+  assert.equal(logic.parseWorkflow('close com.bank.app')[0].command, 'close');
+  assert.throws(() => logic.parseWorkflow('close not a package'), /close expects a package name/);
+  assert.equal(logic.isPin('1234'), true);
+  assert.equal(logic.isPin('123'), false);
+});
+
+test('parseWithdrawRow reads a withdrawal row of the back office table', () => {
+  const cells = [
+    '', '1',
+    'ยูชเซอร์เนม : 0812345678\nชื่อธนาคาร : ธนาคารไทยพาณิชย์\nชื่อบัญชีธนาคาร : นาย ทดสอบ ระบบ\nเลขบัญชีธนาคาร : 123-4-56789-0\nตรวจสอบสถานะสมาชิก :\nตรวจสอบที่อยู่ไอพีสมาชิก :\nรับโปรโมชัน : ไม่รับ\nทรูวอลเลท : -\nแท็ก :\nเงื่อนไข :\n-\nโน้ต :',
+    'จำนวนเงิน :\n1,250.00THB\nถอน :\nเต็มจำนวน',
+    'ถอน :\n11/10/2026 05:41:07\nอนุมัติ :\n11/10/2026 05:42:30',
+    'อนุมัติ', 'อนุมัติโดย :\nแอดมิน', 'ถูกต้อง', '',
+  ];
+  assert.deepEqual(logic.parseWithdrawRow(cells), {
+    user: '0812345678', bank: 'ธนาคารไทยพาณิชย์', holder: 'นาย ทดสอบ ระบบ', account: '1234567890', amount: '1250.00',
+    requested: '11/10/2026 05:41:07', approved: '11/10/2026 05:42:30', key: '1234567890|1250.00|11/10/2026 05:41:07',
+  });
+  // An empty label does not swallow the label after it.
+  assert.equal(logic.parseWithdrawRow(cells.map((cell) => cell.replace('ชื่อบัญชีธนาคาร : นาย ทดสอบ ระบบ', 'ชื่อบัญชีธนาคาร :'))).holder, '');
+  // Rows that are not a withdrawal to a bank account.
+  assert.equal(logic.parseWithdrawRow(['ไม่พบข้อมูล']), null);
+  assert.equal(logic.parseWithdrawRow(cells.map((cell) => cell.replace('123-4-56789-0', ''))), null);
+  assert.equal(logic.parseWithdrawRow(cells.map((cell) => cell.replace('1,250.00THB', '0.00THB'))), null);
+  assert.equal(logic.parseWithdrawRow(undefined), null);
+});
+
+test('a slip whose hidden digits were recognized as percent signs still reads', () => {
+  const text = ['Bangkok Bank', 'รายการสําเร็จ', 'จํานวนเงิน', '2,002.00 THB', 'จาก   นาย ร้าน', '324-0-xxx718', 'ธนาคารกรุงเทพ', 'ไปที่   นาย ผู้รับ', '123-4-%%%890', 'ธนาคารกสิกรไทย', 'ค่าธรรมเนียม 0.00 THB'].join('\n');
+  const slip = logic.parseSlip(text);
+  assert.equal(slip.sender_account_masked, '3240xxx718');
+  assert.equal(slip.receiver_account_masked, '1234xxx890');
+  assert.equal(slip.receiver_bank, 'KBANK');
+  assert.equal(logic.screenShows(text, '1234567890'), true);
+  assert.equal(logic.screenShows(text, '1234567891'), false);
+  // A percentage in the text is not an account.
+  assert.equal(logic.screenShows('ดอกเบี้ย 1.50% ต่อปี 100%', '1234567890'), false);
+});
+
+test('maskAgrees and bankCode tell whether a slip came from a given account', () => {
+  assert.equal(logic.maskAgrees('3240xxx718', '3240555718'), true);
+  assert.equal(logic.maskAgrees('3240xxx718', '324-0-55571-8'), true);
+  assert.equal(logic.maskAgrees('3240xxx718', '3240555719'), false);
+  assert.equal(logic.maskAgrees('3240xxx718', '32405557180'), false);
+  assert.equal(logic.maskAgrees('xxxxxxxxxx', '3240555718'), false);
+  assert.equal(logic.maskAgrees('', '3240555718'), false);
+  assert.equal(logic.bankCode('ธนาคารกรุงเทพ'), 'BBL');
+  assert.equal(logic.bankCode('bbl'), 'BBL');
+  assert.equal(logic.bankCode('ร้านค้า'), '');
+});
+
+test('parseSettlementRow reads one of the shop accounts off the back office list', () => {
+  const cells = ['3', 'Bank', 'ชื่อบัญชี : ร้าน ทดสอบ / BBL 50K\nหมายเลขบัญชี : 3240555718\nแท็ก :', 'THB', '1,649.00', '11/10/2026 06:59:06', '-', '', ''];
+  assert.deepEqual(logic.parseSettlementRow(cells, true), { account: '3240555718', holder: 'ร้าน ทดสอบ / BBL 50K', balance: 1649, updated: '11/10/2026 06:59:06', on: true });
+  assert.equal(logic.parseSettlementRow(cells, false).on, false);
+  assert.equal(logic.parseSettlementRow(cells).on, null);
+  // The running number of the row is not taken for the balance.
+  assert.equal(logic.parseSettlementRow(cells.map((cell) => (cell === '1,649.00' ? '' : cell)), true).balance, null);
+  assert.equal(logic.parseSettlementRow(cells.map((cell) => (cell === '1,649.00' ? '0.00' : cell)), true).balance, 0);
+  // A row that is not a bank account, such as a payment gateway.
+  assert.equal(logic.parseSettlementRow(['1', 'gateway', 'ชื่อเกตเวย์ : abc\n\nโทเคน :', 'THB', '646.00', '11/10/2026 06:59:06'], true), null);
+});
+
+test('parseSlip reads an amount whose comma the reader took for a dot', () => {
+  assert.equal(logic.parseSlip('รายการสำเร็จ\n1.000.00 บาท\nค่าธรรมเนียม 0.00 THB').amount, '1000.00');
+  assert.equal(logic.parseSlip('รายการสำเร็จ\n12,345.50 บาท').amount, '12345.50');
+  assert.equal(logic.parseSlip('รายการสำเร็จ\n1.234.567.00 บาท').amount, '1234567.00');
+  assert.equal(logic.parseSlip('รายการสำเร็จ\n739.50 บาท').amount, '739.50');
 });

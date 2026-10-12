@@ -1,0 +1,227 @@
+{
+  "profile_id": "closejob_v1",
+  "domain_patterns": [
+    "https://*"
+  ],
+  "order_page_url_hint": "/withdraw/transaction",
+  "withdraw_notify_tab_query": "tab=1",
+  "withdraw_notify_pending_tab_query": "tab=0",
+  "amount_from_selector": "#input-amount-from",
+  "amount_to_selector": "#input-amount-to",
+  "settlement_page_path": "/withdraw/settlement",
+  "withdraw_notify_tab_hints": [
+    "รายการที่อนุมัติแล้ว",
+    "อนุมัติแล้ว",
+    "approved"
+  ],
+  "withdraw_notify_pending_tab_hints": [
+    "รายการรออนุมัติ",
+    "รออนุมัติ",
+    "pending"
+  ],
+  "withdraw_notify_status_include": [
+    "อนุมัติแล้ว",
+    "approved"
+  ],
+  "withdraw_notify_status_exclude": [
+    "รออนุมัติ",
+    "pending"
+  ],
+  "approved_search_button_texts": [
+    "ค้นหา",
+    "Search"
+  ],
+  "approved_search_exclude_texts": [
+    "ล้าง",
+    "Clear",
+    "Reset"
+  ],
+  "approved_search_button_selectors": [
+    "button.btn.btn-primary",
+    "button.btn-primary",
+    "button.el-button--primary",
+    "button[type=submit]",
+    "button",
+    "input[type=submit]"
+  ],
+  "row_selector_hints": [
+    "tr.el-table__row",
+    ".el-table__body tr",
+    "tbody tr",
+    "tr"
+  ],
+  "confirm_keywords": [
+    "ยืนยัน",
+    "confirm",
+    "อนุมัติ",
+    "approve",
+    "สำเร็จ",
+    "ปิดงาน"
+  ],
+  "already_confirmed_indicators": [
+    "ยืนยันแล้ว",
+    "confirmed",
+    "สำเร็จแล้ว",
+    "approved",
+    "ปิดงานแล้ว"
+  ],
+  "row_approved_indicators": [
+    "อนุมัติ"
+  ],
+  "logout_indicators": [
+    "form[action*='login']",
+    "input[type='password']",
+    "[class*='login']"
+  ],
+  "order_list_canary_selector": "table, .el-table, [class*='order-list'], [class*='withdraw'], [class*='transaction']",
+  "uses_iframe": false,
+  "dry_run": true,
+  "post_click_verify_timeout_ms": 15000,
+  "click_wait_max_ms": 30000,
+  "close_job_workflow": [
+    {
+      "action": "click",
+      "target": {
+        "in_row": true,
+        "selector_hints": [
+          "[class*='eye']",
+          "[class*='view']",
+          "svg",
+          "button",
+          "a",
+          ".eye-btn"
+        ],
+        "nth_fallback": "last"
+      }
+    },
+    {
+      "action": "wait_for",
+      "selector_hints": [
+        ".el-dialog",
+        "[class*='modal']",
+        "[class*='dialog']",
+        "[role='dialog']"
+      ],
+      "timeout_ms": 10000
+    },
+    {
+      "action": "scroll_into_view",
+      "scope": "popup",
+      "match_text": "โอนเงินทางบัญชี|โอนเงินเรียบร้อยแล้ว|สถานะการถอน|เริ่มการถอนออโต้"
+    },
+    {
+      "action": "wait_for",
+      "scope": "popup",
+      "match_text": "โอนเงินเรียบร้อยแล้ว|สถานะการถอน",
+      "timeout_ms": 5000
+    },
+    {
+      "action": "check",
+      "scope": "popup",
+      "match_text": "โอนเงินเรียบร้อยแล้ว"
+    },
+    {
+      "action": "select_option",
+      "scope": "popup",
+      "scope_text": "โอนเงินทางบัญชี",
+      "field_hint": "สถานะการถอน",
+      "match_text": "สำเร็จ",
+      "timeout_ms": 5000
+    },
+    {
+      "action": "select_option",
+      "scope": "popup",
+      "scope_text": "โอนเงินทางบัญชี",
+      "field_hint": "ชื่อธนาคาร",
+      "value_from": "slip.bank_name_th",
+      "value_from_fallbacks": [
+        "slip.bank_name",
+        "slip.bank"
+      ],
+      "timeout_ms": 8000
+    },
+    {
+      "action": "wait_for",
+      "scope": "popup",
+      "scope_text": "โอนเงินทางบัญชี",
+      "match_text": "หมายเลขบัญชี",
+      "timeout_ms": 5000
+    },
+    {
+      "action": "select_option",
+      "scope": "popup",
+      "scope_text": "โอนเงินทางบัญชี",
+      "field_hint": "หมายเลขบัญชี",
+      "value_from_masked": "slip.sender_account_masked",
+      "value_from": "slip.sender_account_last4",
+      "value_from_fallbacks": [
+        "slip.senderAccountLast4",
+        "slip.sender_account",
+        "slip.from_account_last4",
+        "slip.from_account"
+      ],
+      "timeout_ms": 10000
+    },
+    {
+      "action": "scroll_into_view",
+      "scope": "popup",
+      "match_text": "บันทึก|ยกเลิก"
+    },
+    {
+      "action": "click",
+      "scope": "popup",
+      "match_text": "บันทึก",
+      "nth_fallback": "last",
+      "selector_hints": [
+        "button.btn-primary",
+        "button.btn",
+        "button",
+        "input[type='submit']",
+        "a.btn"
+      ]
+    },
+    {
+      "action": "wait_for",
+      "match_text": "ยืนยันการถอนรายการ|คุณแน่ใจใช่ไหมที่จะบันทึก|บันทึก รายการถอน สำเร็จ",
+      "require_visible": true,
+      "timeout_ms": 8000
+    },
+    {
+      "action": "dismiss_dialog",
+      "match_text": "ตกลง|OK",
+      "timeout_ms": 8000
+    },
+    {
+      "action": "wait_for",
+      "match_text": "บันทึก รายการถอน สำเร็จ|รายการถอน สำเร็จ",
+      "satisfied_by": "success_observed",
+      "timeout_ms": 10000
+    },
+    {
+      "action": "verify_result",
+      "indicators": [
+        "บันทึก รายการถอน สำเร็จ",
+        "รายการถอน สำเร็จ",
+        "ปิดงานสำเร็จ"
+      ],
+      "satisfied_by": "success_observed",
+      "timeout_ms": 5000
+    },
+    {
+      "action": "dismiss_dialog",
+      "match_text": "ตกลง|OK",
+      "timeout_ms": 10000
+    }
+  ],
+  "_notes": [
+    "Target page for withdraw_notify: /withdraw/transaction — leave tab 「รายการที่อนุมัติแล้ว」 open (money ready to transfer).",
+    "Do NOT use 「รายการรออนุมัติ」 for withdraw_notify — that tab is gameplay/log review only.",
+    "Approved-tab auto refresh clicks 「ค้นหา」 (keeps filters). Do NOT tick the site's 「โหลดอัตโนมัติทุก 3 นาที」 — use ClipSync page refresh instead.",
+    "Close-job form is below the fold in the withdrawal modal — scroll_into_view first.",
+    "After บันทึก, the site shows BootstrapVue confirm (ยืนยันการถอนรายการ) — click ตกลง, then SweetAlert2 success — click ตกลง again.",
+    "One dismiss_dialog closes ONE popup: the success SweetAlert2 that mounts from the confirm click is left for the wait_for/verify_result steps, which also pass on satisfied_by success_observed when it is already gone.",
+    "row_approved_indicators is the post-submit proof on the list page (row shows อนุมัติ). Keep it OUT of already_confirmed_indicators — findConfirmButton would then skip rows whose action button is literally 'อนุมัติ'.",
+    "Shop payout account is matched by the slip 'จาก' (sender) account. Prefer the position-aware mask template (sender_account_masked, e.g. '5840xxx518') which works across banks that hide the tail (KBANK 'xxx-x-x0758-x') or show few digits (BBL '584-0-xxx518'); sender_account_last4 is a fallback.",
+    "Keep dry_run true until live clicks are verified end-to-end."
+  ]
+}

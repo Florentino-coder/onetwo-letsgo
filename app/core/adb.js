@@ -4,6 +4,10 @@ const childProcess = require('node:child_process');
 const logic = require('./logic');
 
 const DEFAULT_TIMEOUT_MS = 12000;
+// A screen size is asked for again after this long; one that could not be read is stood in for by
+// the last one read, for no longer than the second figure.
+const SCREEN_SIZE_FRESH_MS = 20000;
+const SCREEN_SIZE_KEPT_MS = 600000;
 
 class AdbError extends Error {}
 
@@ -104,6 +108,45 @@ class AdbClient {
     return this.text(['shell', 'input', 'text', logic.quoteInputText(value)], { serial, timeout: 8000 });
   }
 
+  tap(serial, x, y) {
+    return this.text(['shell', 'input', 'tap', String(x), String(y)], { serial, timeout: 5000 });
+  }
+
+  swipe(serial, x1, y1, x2, y2, duration) {
+    return this.text(['shell', 'input', 'swipe', ...[x1, y1, x2, y2, duration].map(String)], { serial, timeout: 5000 + duration });
+  }
+
+  /** Screen size in the current orientation, which is the space `input tap` works in. */
+  async screenSize(serial) {
+    this.sizes = this.sizes || new Map();
+    const known = this.sizes.get(serial);
+    // A size read a moment ago still holds: the taps of one workflow follow each other closely.
+    if (known && Date.now() - known.at < SCREEN_SIZE_FRESH_MS) return known.size;
+    // A busy phone now and then gives no answer: ask a few times before giving up.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      if (attempt) await new Promise((resolve) => setTimeout(resolve, 700));
+      for (const command of [['shell', 'dumpsys', 'window', 'displays'], ['shell', 'wm', 'size']]) {
+        try {
+          const size = logic.parseScreenSize(await this.text(command, { serial, timeout: 8000 }));
+          if (size) {
+            this.sizes.set(serial, { size, at: Date.now() });
+            return size;
+          }
+        } catch {
+          // try the next source
+        }
+      }
+    }
+    // No answer at all: the size this phone gave within the last while is far more likely right than not.
+    if (known && Date.now() - known.at < SCREEN_SIZE_KEPT_MS) return known.size;
+    throw new AdbError('Unable to read the screen size.');
+  }
+
+  /** Close an app the way "Force stop" in Settings does, so it next opens on its first screen. */
+  forceStop(serial, pkg) {
+    return this.text(['shell', 'am', 'force-stop', pkg], { serial, timeout: 10000 });
+  }
+
   openPackage(serial, pkg) {
     return this.text(['shell', 'monkey', '-p', pkg, '-c', 'android.intent.category.LAUNCHER', '1'], { serial, timeout: 10000 });
   }
@@ -137,6 +180,44 @@ class AdbClient {
   async screenshot(serial) {
     const result = await this.run(['exec-out', 'screencap', '-p'], { serial, timeout: 20000 });
     if (result.code !== 0 || !result.stdout.length) throw new AdbError(result.stderr.trim() || 'Screenshot failed');
+    return result.stdout;
+  }
+
+  /** The screen's view tree as XML. Works where a screenshot is blocked, since it carries text, not pixels. */
+  async uiDump(serial) {
+    const result = await this.run(['exec-out', 'uiautomator', 'dump', '/dev/tty'], { serial, timeout: 20000 });
+    const xml = result.stdout.toString('utf8');
+    if (!xml.includes('<hierarchy')) throw new AdbError(result.stderr.trim() || xml.trim().slice(0, 200) || 'Screen text is not available');
+    return xml;
+  }
+
+  /** The phone's own clock in seconds, which is what its file times are measured against. */
+  async clock(serial) {
+    const seconds = Number.parseInt(await this.text(['shell', 'date', '+%s'], { serial, timeout: 5000 }), 10);
+    if (!Number.isFinite(seconds)) throw new AdbError('Unable to read the phone clock.');
+    return seconds;
+  }
+
+  /** Pictures in the gallery folders changed at or after `since` (phone clock), newest first. */
+  async newImages(serial, since) {
+    const minutes = Math.max(1, Math.ceil(((await this.clock(serial)) - since) / 60) + 1);
+    const command = `find /sdcard/DCIM /sdcard/Pictures /sdcard/Download -type f -mmin -${minutes} `
+      + "\\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \\) -exec stat -c '%Y|%n' {} + 2>/dev/null";
+    // find reports a missing folder through its exit code; the pictures it did find still count.
+    const result = await this.run(['shell', command], { serial, timeout: 20000 });
+    return logic.parseImageList(result.stdout.toString('utf8'), since);
+  }
+
+  /** The bytes of one file on the phone. */
+  async pull(serial, devicePath) {
+    const quoted = `'${String(devicePath).replace(/'/g, `'\\''`)}'`;
+    // One command string: adb re-quotes any separate argument that holds a space, which would
+    // turn these quotes into part of the file name.
+    const result = await this.run(['exec-out', `cat ${quoted}`], { serial, timeout: 30000 });
+    // exec-out does not pass on cat's exit code, and its error text arrives as if it were the file.
+    if (result.code !== 0 || !result.stdout.length || result.stdout.subarray(0, 5).toString('latin1') === 'cat: ') {
+      throw new AdbError(result.stderr.trim() || 'Unable to read the file from the phone');
+    }
     return result.stdout;
   }
 

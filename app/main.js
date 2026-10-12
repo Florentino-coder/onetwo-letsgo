@@ -1,8 +1,10 @@
 'use strict';
 
-const { app, BrowserWindow, Notification, ipcMain, dialog, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, Notification, ipcMain, dialog, shell, nativeImage, safeStorage } = require('electron');
 const childProcess = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -10,11 +12,25 @@ const { AdbClient } = require('./core/adb');
 const { Store } = require('./core/store');
 const logic = require('./core/logic');
 const { checkForUpdate } = require('./updater');
+const { createJobs } = require('./jobs');
+const ocr = require('./ocr');
+const secret = require('./secret');
 
 const APP_NAME = 'ADB-OneTwo';
 const DEVICE_PARALLELISM = 4;
 const THUMBNAIL_WIDTH = 300;
+const RECORD_WIDTH = 540;
+// Time for the screen to react to a recorded gesture before the next picture is taken.
+const RECORD_SETTLE_MS = 700;
 const LOG_MEMORY = 500;
+// How long to wait for the phone app to finish saving its slip picture.
+const SLIP_TRIES = 30;
+const SLIP_RETRY_MS = 1500;
+// A slip's file is read up to this many times, until it has been written whole.
+const SLIP_PULL_TRIES = 8;
+const API_DEFAULT_PORT = 8765;
+const API_MAX_BODY = 16 * 1024;
+const API_MAX_WAITING = 50;
 
 const UPDATE_INTERVAL_MS = 24 * 3600000;
 const UPDATE_POLL_MS = 3600000;
@@ -23,6 +39,8 @@ const VERSION = process.env.FARM_VERSION || app.getVersion();
 const baseDir = process.env.FARM_DATA_DIR
   || (app.isPackaged ? app.getPath('userData') : path.join(__dirname, '..'));
 const store = new Store(baseDir);
+// Sets saved by an older version lack fields added since; give every set its full shape once.
+for (const name of Object.keys(store.state.pick_sets)) store.state.pick_sets[name] = logic.normalizePickSet(store.state.pick_sets[name]);
 
 let win = null;
 let adb = null;
@@ -30,8 +48,36 @@ let scrcpyPath = null;
 let devices = new Map();
 let scanning = false;
 let jobRunning = null;
+let workflowRuns = 0;
 let autoScanTimer = null;
 const liveProcesses = new Map();
+const touchRecorders = new Map();
+const jobs = createJobs({
+  store,
+  appName: APP_NAME,
+  send: (channel, payload) => send(channel, payload),
+  log: (message, level) => log(message, level),
+  // Something the operator should see even with the window out of sight.
+  notify: (body) => {
+    if (Notification.isSupported()) new Notification({ title: APP_NAME, body }).show();
+  },
+  runWorkflow: (request) => runWorkflow(request),
+  onlineSerials: () => [...devices.values()].filter((device) => device.status === 'device').map((device) => device.serial),
+  busy: () => jobRunning,
+  inputsOf: (text) => logic.workflowInputs(logic.parseWorkflow(text)),
+  readScreen: (serial) => readScreen(serial),
+  readSlip: (serial, since) => readSlip(serial, since),
+  phoneClock: (serial) => requireAdb().clock(serial),
+  phones: () => [...devices.values()].filter((device) => device.status === 'device' && deviceMeta(device.serial).pay_on !== false).map((device) => ({ serial: device.serial, label: deviceLabel(device), ...amountRange(device.serial), ...payAccount(device.serial) })),
+  // Money left the phone's account: keep the balance the operator entered in step.
+  spend: (serial, amount) => {
+    const { balance } = payAccount(serial);
+    if (balance === null) return;
+    store.state.devices[serial] = { ...deviceMeta(serial), balance: Math.max(0, Math.round((balance - Number(amount)) * 100) / 100) };
+    store.saveState();
+    send('devices', devicesSnapshot());
+  },
+});
 const healthAlerts = new Set();
 const logs = [];
 
@@ -94,6 +140,31 @@ function deviceMeta(serial) {
   return meta && typeof meta === 'object' ? meta : {};
 }
 
+/** The amounts this phone may pay, as { min, max }; both null when no range is set. */
+function amountRange(serial) {
+  const { amount_min: min, amount_max: max } = deviceMeta(serial);
+  return Number.isFinite(min) && Number.isFinite(max) && min > 0 && max >= min ? { min, max } : { min: null, max: null };
+}
+
+/**
+ * The account a phone pays from and what it may spend, as the operator entered them:
+ * { bank, account, holder, cap, balance, scale }. `cap` is the most it may pay in a day and
+ * `balance` what is left in the account; null for either means "not set, not checked".
+ * `scale` stretches every wait of a workflow on this phone, for a slow phone or connection.
+ */
+function payAccount(serial) {
+  const meta = deviceMeta(serial);
+  const number = (value) => (Number.isFinite(value) && value >= 0 ? value : null);
+  return {
+    bank: typeof meta.pay_bank === 'string' ? meta.pay_bank : '',
+    account: typeof meta.pay_account === 'string' ? meta.pay_account : '',
+    holder: typeof meta.pay_holder === 'string' ? meta.pay_holder : '',
+    cap: number(meta.day_cap),
+    balance: number(meta.balance),
+    scale: Number.isFinite(meta.wait_scale) && meta.wait_scale >= 0.5 && meta.wait_scale <= 5 ? meta.wait_scale : 1,
+  };
+}
+
 function deviceLabel(device) {
   return deviceMeta(device.serial).name || device.model || device.serial;
 }
@@ -108,6 +179,11 @@ function deviceView(device) {
     slot: meta.slot || '',
     label: deviceLabel(device),
     liveProfile: meta.live_profile || '',
+    hasPin: Boolean(meta.pin),
+    amountMin: amountRange(device.serial).min,
+    amountMax: amountRange(device.serial).max,
+    payOn: meta.pay_on !== false,
+    pay: payAccount(device.serial),
     live: liveProcesses.has(device.serial),
   };
 }
@@ -232,6 +308,63 @@ async function captureToFile(serial) {
   const file = path.join(store.dir('captures'), `${safeName(serial)}_${stamp()}.png`);
   fs.writeFileSync(file, await requireAdb().screenshot(serial));
   return file;
+}
+
+/**
+ * Everything readable on a phone's screen, from two sources: the view tree, which is exact but
+ * which some apps keep empty, and text recognition on a screenshot, which some apps blank out.
+ * The screenshot is kept in the captures folder as a record of what was checked.
+ */
+async function readScreen(serial) {
+  await guard(serial, 'Read screen', { allowManualOnly: true, requireCapture: true });
+  const parts = [];
+  const notes = [];
+  let file = '';
+  try {
+    parts.push(logic.parseUiText(await requireAdb().uiDump(serial)));
+  } catch (error) {
+    notes.push(`view tree: ${error.message}`);
+  }
+  try {
+    file = await captureToFile(serial);
+    parts.push(await ocr.recognize(file));
+  } catch (error) {
+    notes.push(`picture: ${error.message}`);
+  }
+  return { text: parts.filter(Boolean).join('\n'), file, notes };
+}
+
+/**
+ * The newest picture the phone saved to its gallery at or after `since` (phone clock), read as
+ * text. An app that saves a slip only when its transaction went through makes that picture the
+ * proof; no screenshot is taken. A copy is kept in the captures folder.
+ */
+async function readSlip(serial, since) {
+  const client = requireAdb();
+  let newest = null;
+  for (let attempt = 0; attempt < SLIP_TRIES && !newest; attempt += 1) {
+    if (attempt) await sleep(SLIP_RETRY_MS);
+    [newest] = await client.newImages(serial, since);
+  }
+  if (!newest) return { text: '', file: '', notes: ['no new picture in the gallery'] };
+  // The phone may still be writing the file: read it until it comes twice the same.
+  let bytes = null;
+  let fault = null;
+  for (let attempt = 0; attempt < SLIP_PULL_TRIES; attempt += 1) {
+    await sleep(SLIP_RETRY_MS);
+    try {
+      const read = await client.pull(serial, newest.path);
+      if (bytes && read.equals(bytes)) break;
+      bytes = read;
+      fault = null;
+    } catch (error) {
+      fault = error;
+    }
+  }
+  if (!bytes) throw fault || new Error('Unable to read the file from the phone.');
+  const file = path.join(store.dir('captures'), `slip_${safeName(serial)}_${stamp()}${path.posix.extname(newest.path).toLowerCase()}`);
+  fs.writeFileSync(file, bytes);
+  return { text: await ocr.recognize(file), file, notes: [`phone file: ${newest.path}`] };
 }
 
 const ACTIONS = {
@@ -389,7 +522,8 @@ async function runWorkflowStep(device, step, workflowName) {
   const { serial } = device;
   switch (step.command) {
     case 'wait':
-      await sleep(Number(step.argument));
+      // A slow phone or connection is given longer at every wait.
+      await sleep(Number(step.argument) * payAccount(serial).scale);
       return;
     case 'keyevent':
       await guard(serial, workflowName);
@@ -399,6 +533,10 @@ async function runWorkflowStep(device, step, workflowName) {
       await guard(serial, workflowName, { pkg: step.argument, allowManualOnly: true });
       await requireAdb().openPackage(serial, step.argument);
       return;
+    case 'close':
+      await guard(serial, workflowName, { pkg: step.argument, allowManualOnly: true });
+      await requireAdb().forceStop(serial, step.argument);
+      return;
     case 'text':
       await guard(serial, workflowName);
       await requireAdb().inputText(serial, step.argument);
@@ -407,10 +545,223 @@ async function runWorkflowStep(device, step, workflowName) {
       await guard(serial, workflowName, { allowManualOnly: true, requireCapture: true });
       await captureToFile(serial);
       return;
+    case 'tap':
+    case 'swipe': {
+      await guard(serial, workflowName);
+      const gesture = logic.parseGesture(step.command, step.argument);
+      const pixels = gesture.pixel ? gesture.points : logic.gesturePixels(gesture.points, await requireAdb().screenSize(serial));
+      if (step.command === 'tap') await requireAdb().tap(serial, ...pixels);
+      else await requireAdb().swipe(serial, ...pixels, gesture.duration);
+      // Percentages resolve per device, so report the pixels that were used.
+      return gesture.pixel ? '' : `${pixels.join(' ')} px`;
+    }
     default:
       await guard(serial, workflowName);
       await requireAdb().keyevent(serial, logic.KEY_ALIASES[step.command]);
   }
+}
+
+// A phone's app PIN is kept encrypted by Windows for this user account (see secret.js), in the device's saved
+// details. It is decrypted to plan a run, and for the window only when the operator asks to see
+// it. It is not part of the app's state and is never logged.
+// What has been read back since the app started, by its kept form: asking Windows takes half a second.
+const pinsRead = new Map();
+
+function devicePin(serial) {
+  const kept = deviceMeta(serial).pin;
+  if (typeof kept !== 'string' || !kept) return '';
+  if (pinsRead.has(kept)) return pinsRead.get(kept);
+  let pin = '';
+  try {
+    // A PIN kept by an older version was encrypted with the window profile's own key.
+    if (secret.isProtected(kept)) pin = secret.reveal(kept);
+    else if (safeStorage.isEncryptionAvailable()) pin = safeStorage.decryptString(Buffer.from(kept, 'base64'));
+  } catch {
+    // Kept by another Windows account or computer, or with a key that is gone: as good as not set.
+    pin = '';
+  }
+  pinsRead.set(kept, pin);
+  return pin;
+}
+
+/**
+ * The steps each device will run, worked out before anything is pressed, so a run that cannot be
+ * completed on one of them starts on none. Devices differ only in their PIN.
+ */
+function planWorkflow(text, values, serials) {
+  const parsed = logic.parseWorkflow(text);
+  const plans = new Map();
+  for (const serial of Array.isArray(serials) ? serials : []) {
+    try {
+      plans.set(serial, logic.expandWorkflow(parsed, values, store.state.workflows, store.state.pick_sets, devicePin(serial)));
+    } catch (error) {
+      const device = devices.get(serial);
+      // A PIN that is kept but cannot be read is a different thing to fix than one never set.
+      const unreadable = deviceMeta(serial).pin && !devicePin(serial) && /No PIN is set/.test(error.message);
+      const message = unreadable ? 'The PIN kept for this phone can no longer be read. Set it again in the device details.' : error.message;
+      throw new Error(serials.length > 1 && device ? `${deviceLabel(device)}: ${message}` : message);
+    }
+  }
+  return plans;
+}
+
+/** Run a workflow on each device. `values` fill the {1}, {2}… of its text steps. */
+function runWorkflow({ name, text, serials, values }) {
+  const plans = planWorkflow(text, values, serials);
+  const workflowName = String(name || 'Workflow').trim() || 'Workflow';
+  workflowRuns += 1;
+  const run = workflowRuns;
+  return runJob(`Workflow ${workflowName}`, serials, async (device) => {
+    const steps = plans.get(device.serial);
+    for (const [index, step] of steps.entries()) {
+      // The timeline in the workflow view follows these events step by step. A secret step, such
+      // as a key of the PIN, is shown without where it tapped.
+      const entry = { run, name: workflowName, serial: device.serial, label: deviceLabel(device), index, total: steps.length, command: step.command, argument: step.secret ? '•••' : step.argument, note: step.note };
+      const started = Date.now();
+      send('timeline', { ...entry, status: 'running', at: started });
+      try {
+        const detail = await runWorkflowStep(device, step, workflowName);
+        send('timeline', { ...entry, status: 'ok', at: started, ms: Date.now() - started, detail: step.secret ? '' : detail || '' });
+      } catch (error) {
+        send('timeline', { ...entry, status: 'error', at: started, ms: Date.now() - started, detail: error.message });
+        throw new Error(`step ${index + 1} (${step.command}): ${error.message}`);
+      }
+    }
+    return `${steps.length} step(s)`;
+  });
+}
+
+// ── web API ──────────────────────────────────────────────────────────────
+// Lets another system, such as a job page on a website, run a saved workflow with its own values.
+// Off until switched on in Settings. Every request needs the key, and the server listens on this
+// computer only unless LAN access is switched on as well.
+
+let apiServer = null;
+let apiQueue = Promise.resolve();
+let apiWaiting = 0;
+
+class ApiError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+function apiAuthorized(request) {
+  const header = String(request.headers.authorization || '');
+  const sent = header.startsWith('Bearer ') ? header.slice(7).trim() : String(request.headers['x-api-key'] || '');
+  const key = store.config.api_token;
+  if (!key || !sent) return false;
+  const digest = (value) => crypto.createHash('sha256').update(value).digest();
+  return crypto.timingSafeEqual(digest(sent), digest(key));
+}
+
+async function apiRoute(method, pathname, body) {
+  if (method === 'GET' && pathname === '/api/status') {
+    return {
+      devices: [...devices.values()].filter((device) => device.status === 'device').map((device) => ({ serial: device.serial, name: deviceLabel(device) })),
+      running: jobRunning,
+      waiting: apiWaiting,
+    };
+  }
+  if (method === 'GET' && pathname === '/api/workflows') {
+    return Object.entries(store.state.workflows).map(([name, text]) => ({ name, inputs: logic.workflowInputs(logic.parseWorkflow(text)) }));
+  }
+  if (method !== 'POST' || pathname !== '/api/run') throw new ApiError(404, 'Unknown address. Use POST /api/run, GET /api/workflows or GET /api/status.');
+
+  const name = String(body.workflow || '');
+  const text = Object.hasOwn(store.state.workflows, name) ? store.state.workflows[name] : null;
+  if (!text) throw new ApiError(404, `Workflow '${name}' is not saved in the app.`);
+  let serials = Array.isArray(body.serials) ? body.serials : body.serial ? [body.serial] : null;
+  if (!serials) {
+    const online = [...devices.values()].filter((device) => device.status === 'device');
+    if (online.length !== 1) throw new ApiError(400, `Send "serial": ${online.length} devices are online, so the app cannot pick one.`);
+    serials = [online[0].serial];
+  }
+  // Check the values before queueing, so a bad job is refused at once.
+  planWorkflow(text, body.values, serials);
+  if (apiWaiting >= API_MAX_WAITING) throw new ApiError(429, 'Too many jobs are waiting.');
+
+  // Web jobs run one after another, in the order they arrive.
+  apiWaiting += 1;
+  const job = apiQueue.then(() => {
+    log(`Web job: workflow ${name}.`);
+    return runWorkflow({ name, text, serials, values: body.values });
+  });
+  apiQueue = job.catch(() => {});
+  try {
+    const outcome = await job;
+    return { ok: outcome.failed === 0, workflow: name, results: outcome.results };
+  } catch (error) {
+    throw new ApiError(error.message.startsWith('Wait for') ? 409 : 400, error.message);
+  } finally {
+    apiWaiting -= 1;
+  }
+}
+
+function onApiRequest(request, response) {
+  const reply = (status, data) => {
+    response.writeHead(status, {
+      'Content-Type': 'application/json; charset=utf-8',
+      // The key, not the origin, is what protects the API, so a web page may call it.
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Api-Key',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Private-Network': 'true',
+    });
+    response.end(status === 204 ? '' : JSON.stringify(data));
+  };
+  if (request.method === 'OPTIONS') {
+    reply(204);
+    return;
+  }
+  if (!apiAuthorized(request)) {
+    reply(401, { ok: false, error: 'Missing or wrong API key.' });
+    return;
+  }
+  const chunks = [];
+  let size = 0;
+  request.on('data', (chunk) => {
+    size += chunk.length;
+    if (size > API_MAX_BODY) request.destroy();
+    else chunks.push(chunk);
+  });
+  request.on('end', async () => {
+    try {
+      const raw = Buffer.concat(chunks).toString('utf8');
+      let body = {};
+      if (raw.trim()) {
+        try {
+          body = JSON.parse(raw);
+        } catch {
+          throw new ApiError(400, 'The request body is not valid JSON.');
+        }
+      }
+      if (!body || typeof body !== 'object' || Array.isArray(body)) throw new ApiError(400, 'The request body must be a JSON object.');
+      reply(200, await apiRoute(request.method, new URL(request.url, 'http://localhost').pathname, body));
+    } catch (error) {
+      reply(error.status || 400, { ok: false, error: error.message });
+    }
+  });
+}
+
+function startApi() {
+  if (apiServer) {
+    apiServer.close();
+    apiServer.closeAllConnections();
+    apiServer = null;
+  }
+  if (!store.config.api_enabled) return;
+  if (!CONFIG_KEYS.api_token(store.config.api_token)) {
+    store.config.api_token = crypto.randomBytes(24).toString('hex');
+    store.saveConfig();
+  }
+  const host = store.config.api_lan ? '0.0.0.0' : '127.0.0.1';
+  const port = CONFIG_KEYS.api_port(store.config.api_port);
+  const server = http.createServer(onApiRequest);
+  server.on('error', (error) => log(`Web API could not start on port ${port}: ${error.message}`, 'error'));
+  server.listen(port, host, () => log(`Web API is listening on ${host}:${port}.`));
+  apiServer = server;
 }
 
 // ── APK library ──────────────────────────────────────────────────────────
@@ -503,6 +854,10 @@ const CONFIG_KEYS = {
   high_temp_c: (v) => Math.min(80, Math.max(25, Number.parseFloat(v) || 42)),
   scrcpy_profile: (v) => (logic.SCRCPY_PROFILES[v] ? v : 'Balanced'),
   node_name: (v) => String(v || '').trim().slice(0, 60) || os.hostname(),
+  api_enabled: Boolean,
+  api_lan: Boolean,
+  api_port: (v) => Math.min(65535, Math.max(1024, Number.parseInt(v, 10) || API_DEFAULT_PORT)),
+  api_token: (v) => (/^[a-f0-9]{32,64}$/.test(v) ? v : ''),
 };
 
 function publicState() {
@@ -516,6 +871,9 @@ function publicState() {
     apkLibraryDir: apkLibraryDir(),
     devices: devicesSnapshot(),
     workflows: store.state.workflows,
+    points: store.state.points,
+    pickSets: store.state.pick_sets,
+    jobs: jobs.view(),
     policies: store.state.policies,
     groupProfiles: store.state.group_live_profiles,
     profiles: logic.SCRCPY_PROFILES,
@@ -549,6 +907,14 @@ function registerIpc() {
     }
     store.saveConfig();
     scheduleAutoScan();
+    if (Object.keys(patch).some((key) => key.startsWith('api_'))) startApi();
+    return publicState().config;
+  });
+
+  handle('api:token', () => {
+    store.config.api_token = crypto.randomBytes(24).toString('hex');
+    store.saveConfig();
+    log('Web API key replaced.');
     return publicState().config;
   });
 
@@ -578,6 +944,104 @@ function registerIpc() {
     store.saveState();
     log(`Saved details for ${serial}.`, 'info', serial);
     return devicesSnapshot();
+  });
+
+  // The amounts this phone may pay. A withdrawal outside every phone's range is left alone. Empty clears it.
+  handle('device:range', ({ serial, min, max }) => {
+    if (!devices.has(serial)) throw new Error('Select a device first.');
+    const meta = { ...deviceMeta(serial) };
+    if (String(min ?? '') === '' && String(max ?? '') === '') {
+      delete meta.amount_min;
+      delete meta.amount_max;
+    } else {
+      const low = Number(min);
+      const high = Number(max);
+      if (!(low > 0) || !(high >= low)) throw new Error('Enter the smallest and the largest amount, for example 100 and 499.');
+      meta.amount_min = low;
+      meta.amount_max = high;
+    }
+    store.state.devices[serial] = meta;
+    store.saveState();
+    log(meta.amount_min ? `${serial} pays withdrawals from ${meta.amount_min} to ${meta.amount_max}.` : `${serial} pays no withdrawals.`, 'info', serial);
+    return devicesSnapshot();
+  });
+
+  // The account this phone pays from, its daily cap, what is left in it, and how slow the phone is.
+  handle('device:account', ({ serial, bank, account, holder, cap, balance, scale }) => {
+    if (!devices.has(serial)) throw new Error('Select a device first.');
+    const digits = String(account || '').replace(/[\s-]/g, '');
+    if (digits && !/^\d{6,20}$/.test(digits)) throw new Error('An account number is 6 to 20 digits.');
+    const amount = (value, name) => {
+      if (String(value ?? '').trim() === '') return undefined;
+      const number = Number(value);
+      if (!(number >= 0)) throw new Error(`${name} is an amount of money, or empty.`);
+      return number;
+    };
+    const speed = String(scale ?? '').trim() === '' ? 1 : Number(scale);
+    if (!(speed >= 0.5 && speed <= 5)) throw new Error('The wait multiplier is between 0.5 and 5.');
+    const meta = { ...deviceMeta(serial), pay_bank: String(bank || '').trim().slice(0, 60), pay_account: digits, pay_holder: String(holder || '').trim().slice(0, 80), wait_scale: speed };
+    for (const [key, value] of [['day_cap', amount(cap, 'The daily cap')], ['balance', amount(balance, 'The balance')]]) {
+      if (value === undefined) delete meta[key];
+      else meta[key] = value;
+    }
+    store.state.devices[serial] = meta;
+    store.saveState();
+    log(`Saved the paying account of ${serial}.`, 'info', serial);
+    return devicesSnapshot();
+  });
+
+  // Whether this phone takes withdrawals at all. Off keeps its range but gives it no rows.
+  handle('device:pay', async ({ serial, on }) => {
+    if (!devices.has(serial)) throw new Error('Select a device first.');
+    const keep = (value) => {
+      store.state.devices[serial] = { ...deviceMeta(serial), pay_on: value };
+      store.saveState();
+      send('devices', devicesSnapshot());
+    };
+    const signedIn = await jobs.signedIn();
+    // A phone is switched on only with the back office signed in: its account is switched on there too.
+    if (on && !signedIn) throw new Error('Sign in to the back office first: a phone is switched on only while the back office is signed in.');
+    keep(Boolean(on));
+    log(`${serial} ${on ? 'takes' : 'no longer takes'} withdrawals.`, 'info', serial);
+    // The phone's account stands the same way in the back office. Switched on, it is offered on the
+    // close-job form; a phone whose account could not be switched on does not stay on.
+    if (signedIn) {
+      await jobs.switchAccount(payAccount(serial).account, Boolean(on)).catch((error) => {
+        if (on) keep(false);
+        throw error;
+      });
+    }
+    return devicesSnapshot();
+  });
+
+  // Set or clear the PIN a `pin` step presses on this phone. An empty PIN clears it.
+  handle('device:pin', ({ serial, pin }) => {
+    if (!devices.has(serial)) throw new Error('Select a device first.');
+    const value = String(pin || '');
+    const meta = { ...deviceMeta(serial) };
+    if (!value) {
+      delete meta.pin;
+    } else {
+      if (!logic.isPin(value)) throw new Error('A PIN is 4 to 12 digits.');
+      try {
+        meta.pin = secret.protect(value);
+      } catch (error) {
+        throw new Error(`Windows could not keep the PIN, so it was not saved: ${error.message.split(/\r?\n/)[0]}`);
+      }
+    }
+    store.state.devices[serial] = meta;
+    store.saveState();
+    log(value ? `Set the PIN for ${serial}.` : `Cleared the PIN for ${serial}.`, 'info', serial);
+    return devicesSnapshot();
+  });
+
+  // The PIN kept for this phone, for the operator who pressed "show". That it was shown is logged; the PIN is not.
+  handle('device:pin-show', ({ serial }) => {
+    if (!devices.has(serial)) throw new Error('Select a device first.');
+    const pin = devicePin(serial);
+    if (!pin) throw new Error('The PIN kept for this phone cannot be read on this Windows account. Set it again.');
+    log(`Showed the PIN for ${serial}.`, 'info', serial);
+    return pin;
   });
 
   handle('device:group', ({ serials, group }) => {
@@ -694,20 +1158,198 @@ function registerIpc() {
 
   handle('workflow:preview', ({ text }) => logic.parseWorkflow(text));
 
-  handle('workflow:run', ({ name, text, serials }) => {
-    const steps = logic.parseWorkflow(text);
-    const workflowName = String(name || 'Workflow').trim() || 'Workflow';
-    return runJob(`Workflow ${workflowName}`, serials, async (device) => {
-      for (const step of steps) {
-        try {
-          await runWorkflowStep(device, step, workflowName);
-        } catch (error) {
-          throw new Error(`line ${step.lineNo} (${step.command}): ${error.message}`);
-        }
-      }
-      return `${steps.length} step(s)`;
+  handle('workflow:run', (request) => runWorkflow(request));
+
+  // Record what the user presses on the phone itself: follow its raw input events until stopped.
+  handle('touch:start', async ({ serial, fromHome }) => {
+    const [device] = onlineDevices([serial]);
+    if (!device) throw new Error('Select an online device first.');
+    if (touchRecorders.has(serial)) return true;
+    const client = requireAdb();
+    // A recording that starts on the home screen replays from the same place every time.
+    if (fromHome) {
+      await guard(serial, 'Record');
+      await client.keyevent(serial, logic.KEY_ALIASES.wake);
+      await client.keyevent(serial, logic.KEY_ALIASES.home);
+    }
+    const touchDevices = logic.parseTouchDevices(await client.text(['shell', 'getevent', '-lp'], { serial, timeout: 8000 }));
+    if (!touchDevices.length) throw new Error('This device does not report its touchscreen to ADB.');
+    const recorder = new logic.TouchRecorder(touchDevices);
+    const child = childProcess.spawn(client.adbPath, ['-s', serial, 'shell', 'getevent', '-lt'], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+    touchRecorders.set(serial, child);
+    let pending = '';
+    child.stdout.on('data', (chunk) => {
+      const lines = (pending + chunk.toString('utf8')).split(/\r?\n/);
+      pending = lines.pop();
+      const steps = lines.flatMap((line) => recorder.push(line));
+      if (steps.length) send('touch', { serial, steps });
     });
+    const stopped = () => {
+      if (touchRecorders.get(serial) !== child) return;
+      touchRecorders.delete(serial);
+      send('touch', { serial, stopped: true });
+    };
+    child.once('exit', stopped);
+    child.once('error', (error) => {
+      log(`Unable to record touches: ${error.message}`, 'error', serial);
+      stopped();
+    });
+    log(`Recording touches on ${deviceLabel(device)}.`, 'info', serial);
+    return true;
   });
+
+  handle('touch:stop', ({ serial }) => {
+    const child = touchRecorders.get(serial);
+    if (child) child.kill();
+    return Boolean(child);
+  });
+
+  // Named screen positions the workflow builder can drop into a tap step.
+  handle('point:save', ({ name, value }) => {
+    const pointName = String(name || '').trim().slice(0, 40);
+    if (!pointName) throw new Error('Enter a name for the position.');
+    const position = String(value || '').trim();
+    if (!logic.parseGesture('tap', position)) throw new Error("A position is X and Y, for example '540 960' or '50% 30%'.");
+    store.state.points[pointName] = position;
+    store.saveState();
+    log(`Saved position ${pointName} (${position}).`);
+    return store.state.points;
+  });
+
+  handle('point:delete', ({ name }) => {
+    delete store.state.points[name];
+    store.saveState();
+    log(`Deleted position ${name}.`);
+    return store.state.points;
+  });
+
+  // Position sets: one list on the phone, with where each name in it is. A `pick` step taps by name.
+  const pickSetName = (name) => {
+    const setName = String(name || '').trim();
+    if (!/^\S{1,40}$/.test(setName)) throw new Error('A position set needs a name of at most 40 characters, with no spaces.');
+    return setName;
+  };
+
+  handle('pick:save', ({ set, name, page, at }) => {
+    const setName = pickSetName(set);
+    const current = logic.normalizePickSet(store.state.pick_sets[setName]);
+    // Saving with no name makes the empty set.
+    if (name !== undefined) {
+      const itemName = String(name || '').trim().slice(0, 60);
+      if (!itemName) throw new Error('Enter a name for the position.');
+      const position = String(at || '').trim();
+      if (!logic.parseGesture('tap', position)) throw new Error("A position is X and Y, for example '50% 30%'.");
+      // Taking a position again keeps the name's other spellings.
+      current.items[itemName] = { ...current.items[itemName], page: Number(page) || 0, at: position };
+      log(`Position set ${setName}: saved ${itemName} (page ${Number(page) || 0}, ${position}).`);
+    }
+    store.state.pick_sets[setName] = logic.normalizePickSet(current);
+    store.saveState();
+    return store.state.pick_sets;
+  });
+
+  // Change a position's name and the other spellings that mean it.
+  handle('pick:edit', ({ set, name, newName, also }) => {
+    const current = logic.normalizePickSet(store.state.pick_sets[set]);
+    const item = current.items[name];
+    if (!item) throw new Error('That position is no longer in the set.');
+    const itemName = String(newName || '').trim().slice(0, 60);
+    if (!itemName) throw new Error('Enter a name for the position.');
+    if (itemName !== name && current.items[itemName]) throw new Error(`The set already has a position named '${itemName}'.`);
+    delete current.items[name];
+    current.items[itemName] = { ...item, also: Array.isArray(also) ? also : item.also };
+    store.state.pick_sets[set] = logic.normalizePickSet(current);
+    store.saveState();
+    log(`Position set ${set}: ${name} is now ${itemName}${current.items[itemName].also.length ? `, also ${current.items[itemName].also.join(', ')}` : ''}.`);
+    return store.state.pick_sets;
+  });
+
+  // Rename a set, and the pick steps of saved workflows that use it, so they keep working.
+  handle('pick:rename', ({ set, newName }) => {
+    const setName = pickSetName(newName);
+    if (!store.state.pick_sets[set]) throw new Error('That position set is no longer saved.');
+    if (setName === set) return { sets: store.state.pick_sets, workflows: store.state.workflows };
+    if (store.state.pick_sets[setName]) throw new Error(`There is already a position set named '${setName}'.`);
+    store.state.pick_sets[setName] = store.state.pick_sets[set];
+    delete store.state.pick_sets[set];
+    let changed = 0;
+    for (const [name, text] of Object.entries(store.state.workflows)) {
+      const next = String(text).split(/\r?\n/).map((line) => {
+        const pick = /^\s*pick\s/i.test(line) ? logic.parsePick(line.trim().slice(5)) : null;
+        return pick && pick.set === set ? `pick ${setName} ${pick.name}` : line;
+      }).join('\n');
+      if (next !== text) {
+        store.state.workflows[name] = next;
+        changed += 1;
+      }
+    }
+    store.saveState();
+    log(`Renamed position set ${set} to ${setName}; ${changed} saved workflow(s) updated.`);
+    return { sets: store.state.pick_sets, workflows: store.state.workflows };
+  });
+
+  handle('pick:delete', ({ set, name }) => {
+    if (name === undefined) delete store.state.pick_sets[set];
+    else if (store.state.pick_sets[set]) delete store.state.pick_sets[set].items[name];
+    store.saveState();
+    log(name === undefined ? `Deleted position set ${set}.` : `Position set ${set}: deleted ${name}.`);
+    return store.state.pick_sets;
+  });
+
+  handle('pick:scroll', ({ set, value }) => {
+    const setName = pickSetName(set);
+    const scroll = String(value || '').trim();
+    if (!logic.parseGesture('swipe', scroll)) throw new Error("A scroll is a swipe, for example '50% 70% 50% 35% 1500'.");
+    store.state.pick_sets[setName] = { ...logic.normalizePickSet(store.state.pick_sets[setName]), scroll };
+    store.saveState();
+    return store.state.pick_sets;
+  });
+
+  // Scroll the phone's list to a page of the set, the way a run does, so positions can be taken there.
+  handle('pick:goto', async ({ serial, set, page }) => {
+    const [device] = onlineDevices([serial]);
+    if (!device) throw new Error('Select an online device first.');
+    const { scroll } = logic.normalizePickSet(store.state.pick_sets[set]);
+    for (let turn = 0; turn < (Number(page) || 0); turn += 1) {
+      await runWorkflowStep(device, { command: 'swipe', argument: scroll }, 'Position set');
+      await sleep(700);
+    }
+    return true;
+  });
+
+  // The recorder: optionally perform one tap or swipe on a single device, then return its screen.
+  handle('workflow:record', async ({ serial, step }) => {
+    const [device] = onlineDevices([serial]);
+    if (!device) throw new Error('Select an online device first.');
+    if (step) {
+      if (jobRunning) throw new Error(`Wait for "${jobRunning}" to finish first.`);
+      const [gesture] = logic.parseWorkflow(step);
+      if (gesture.command !== 'tap' && gesture.command !== 'swipe') throw new Error('Only tap and swipe can be recorded.');
+      await runWorkflowStep(device, gesture, 'Record');
+      await sleep(RECORD_SETTLE_MS);
+    }
+    await guard(serial, 'Record', { allowManualOnly: true, requireCapture: true });
+    const image = nativeImage.createFromBuffer(await requireAdb().screenshot(serial));
+    if (image.isEmpty()) throw new Error('Device returned an empty image.');
+    const jpeg = image.resize({ width: RECORD_WIDTH, quality: 'good' }).toJPEG(80);
+    // The full-size picture is in the same pixel space `input tap` uses.
+    return { dataUrl: `data:image/jpeg;base64,${jpeg.toString('base64')}`, ...image.getSize() };
+  });
+
+  handle('jobs:set', (patch) => jobs.save(patch));
+  handle('jobs:open', () => jobs.open());
+  handle('jobs:pick', ({ field }) => jobs.pick(field));
+  handle('jobs:record', ({ on, field }) => jobs.record(Boolean(on), field));
+  handle('jobs:clear', ({ field }) => jobs.clear(field));
+  handle('jobs:read', () => jobs.read());
+  handle('jobs:run', () => jobs.runOnce());
+  handle('jobs:auto', ({ on }) => jobs.setAuto(Boolean(on)));
+  handle('jobs:screen', () => jobs.screen());
+  handle('jobs:orders', () => jobs.refreshOrders());
+  handle('jobs:pay', ({ key }) => jobs.pay(String(key || '')));
+  handle('jobs:payauto', ({ on }) => jobs.setPayAuto(Boolean(on)));
+  handle('jobs:unhalt', () => jobs.unhalt());
+  handle('jobs:resolve', ({ key, note }) => jobs.resolve(String(key || ''), note));
 
   handle('update:check', () => runUpdateCheck());
 
@@ -760,6 +1402,8 @@ function createWindow() {
     },
   });
   win.removeMenu();
+  // The back-office window belongs to this one: closing the app closes it too.
+  win.on('closed', () => jobs.close());
   // The UI is local files only: never navigate away or open new windows from the renderer.
   win.webContents.on('will-navigate', (event) => event.preventDefault());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -784,13 +1428,19 @@ if (!app.requestSingleInstanceLock()) {
     ensureDefaults();
     loadTools();
     registerIpc();
+    startApi();
     createWindow();
     checkUpdateIfDue();
     setInterval(checkUpdateIfDue, UPDATE_POLL_MS);
   });
+  // The back-office window only hides when it is closed, so it is closed for good before a quit.
+  app.on('before-quit', () => jobs.close());
   app.on('window-all-closed', () => {
     clearTimeout(autoScanTimer);
     closeLive([...liveProcesses.keys()]);
+    for (const child of touchRecorders.values()) child.kill();
+    if (apiServer) apiServer.close();
+    jobs.close();
     app.quit();
   });
 }

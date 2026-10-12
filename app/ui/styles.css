@@ -155,9 +155,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .segment button { height: 30px; padding: 0 14px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); cursor: pointer; font-weight: 500; }
 .segment button.active { background: var(--panel); color: var(--text); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18); }
 
-.switch { display: inline-flex; align-items: center; gap: 9px; white-space: nowrap; cursor: pointer; color: var(--muted); font-size: 13.5px; }
+.switch { position: relative; display: inline-flex; align-items: center; gap: 9px; cursor: pointer; color: var(--muted); font-size: 13.5px; }
 .switch input { position: absolute; opacity: 0; pointer-events: none; }
-.switch .track { width: 38px; height: 22px; border-radius: 999px; background: var(--panel-3); border: 1px solid var(--border); position: relative; transition: background 0.15s; }
+.switch .track { flex: none; width: 38px; height: 22px; border-radius: 999px; background: var(--panel-3); border: 1px solid var(--border); position: relative; transition: background 0.15s; }
 .switch .track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--muted); transition: transform 0.15s, background 0.15s; }
 .switch input:checked + .track { background: var(--accent); border-color: var(--accent); }
 .switch input:checked + .track::after { transform: translateX(16px); background: var(--on-accent); }
@@ -222,6 +222,60 @@ select.field { appearance: none; padding-right: 30px; background-image: linear-g
 .button-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
+.wf-steps { display: flex; flex-direction: column; gap: 8px; }
+.wf-step { display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel-2); }
+.wf-step .num { flex: none; width: 20px; color: var(--muted); text-align: right; }
+.wf-step .name { flex: none; width: 96px; font-weight: 500; }
+.wf-step .field { flex: 1; min-width: 0; width: auto; }
+.wf-step .btn.icon { flex: none; width: 32px; height: 32px; }
+.wf-step { flex-wrap: wrap; }
+.wf-step .wf-note { flex: 0 0 calc(100% - 28px); margin-left: 28px; height: 30px; font-size: 13px; background: transparent; border-style: dashed; }
+.wf-step .wf-note:not(:placeholder-shown) { border-style: solid; color: var(--accent-strong); }
+.wf-record { margin-top: 10px; }
+.job-field { display: flex; align-items: center; gap: 10px; }
+.section p.hint.job-note { margin: -4px 0 0; }
+.job-screen { max-height: 220px; margin: 0; padding: 10px 12px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--field); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.job-source { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: -4px 0 6px; }
+.job-source .field { flex: 1 0 100%; height: 34px; }
+.job-field .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-field .btn.icon { flex: none; width: 32px; height: 32px; }
+.job-url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-reload { display: flex; align-items: flex-end; padding-bottom: 8px; }
+.section p.hint.job-warn { margin: 12px 0 0; color: var(--danger); }
+.api-key { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
+.api-example { white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.tl-row { display: flex; align-items: baseline; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); }
+.tl-row .tl-state { flex: none; color: var(--muted); }
+.tl-row.ok .tl-state { color: var(--success); }
+.tl-row.error .tl-state, .tl-row.error .muted:last-child { color: var(--danger); }
+.wf-points { display: flex; flex-direction: column; gap: 8px; }
+.wf-point { display: flex; align-items: center; gap: 10px; }
+.wf-point .btn:first-child { flex: 1; min-width: 0; justify-content: flex-start; overflow: hidden; white-space: nowrap; }
+.wf-point .btn.icon { flex: none; width: 32px; height: 32px; }
+.pick-set { flex: 1; min-width: 160px; }
+.pin-box { flex: 1; min-width: 140px; max-width: 220px; }
+.pin-kept { margin-bottom: 10px; }
+.pin-kept .label { margin: 0; }
+.pin-value { min-width: 110px; font-size: 16px; letter-spacing: 2px; user-select: text; }
+.pick-page { padding-top: 10px; border-top: 1px solid var(--border); }
+.pick-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.pick-cell { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--field); }
+.pick-cell .grow { min-width: 0; }
+.pick-cell .pick-name, .pick-cell .pick-also, .pick-cell .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick-cell .btn.icon { flex: none; width: 28px; height: 28px; }
+.modal.prompt .field { margin-bottom: 20px; }
+
+.modal.recorder { width: min(460px, calc(100vw - 48px)); }
+.modal.recorder p { margin-bottom: 12px; }
+.modal.recorder p.error { color: var(--danger); }
+.wf-step.gesture .name { width: auto; min-width: 34px; }
+.wf-xy { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.wf-step .wf-xy .field { flex: none; width: 62px; padding: 0 8px; }
+.wf-step .wf-xy select.field { width: 56px; padding-right: 22px; background-position: calc(100% - 13px) 16px, calc(100% - 8px) 16px; }
+.wf-xy input::-webkit-inner-spin-button { appearance: none; }
+.rec-pos { margin-bottom: 14px; text-align: center; }
+.rec-screen { display: block; max-width: 100%; max-height: calc(100vh - 280px); min-height: 120px; margin: 0 auto 8px; border: 1px solid var(--border); border-radius: 12px; cursor: crosshair; touch-action: none; user-select: none; }
+
 dl.facts { display: grid; grid-template-columns: 120px 1fr; gap: 9px 12px; margin: 0; }
 dl.facts dt { color: var(--muted); }
 dl.facts dd { margin: 0; user-select: text; overflow-wrap: anywhere; }
@@ -261,3 +315,30 @@ dl.facts dd { margin: 0; user-select: text; overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+.job-steps { margin: -4px 0 0; padding-left: 22px; overflow-wrap: anywhere; }
+.job-warn-text { color: var(--danger); }
+.targets.halt { background: var(--danger-soft); color: var(--danger); align-items: flex-start; }
+.targets.halt .muted { color: inherit; opacity: 0.85; font-weight: 400; margin-top: 4px; }
+.table-wrap { overflow-x: auto; }
+table.orders { width: 100%; border-collapse: collapse; }
+table.orders th { text-align: left; font-weight: 500; color: var(--muted); padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+table.orders td { padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; user-select: text; }
+table.orders td.num { text-align: right; font-weight: 600; white-space: nowrap; }
+table.orders tr.bad td { background: var(--danger-soft); }
+table.orders tr.good td { opacity: 0.6; }
+.audit { display: flex; flex-direction: column; gap: 4px; font-size: 12px; overflow-wrap: anywhere; user-select: text; }
+.audit .bad { color: var(--danger); }
+.pay-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 12px; }
+.pay-card { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); }
+.pay-card.idle { opacity: 0.75; }
+.pay-card.selected { border-color: var(--accent); }
+.pay-card .row { display: flex; align-items: center; gap: 8px; }
+.pay-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+dl.pay-facts { grid-template-columns: 72px 1fr; gap: 4px 10px; }
+.pay-range .field { flex: 1; min-width: 70px; height: 34px; }
+.pay-detail { margin-top: 4px; font-size: 12px; overflow-wrap: anywhere; max-width: 320px; }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.seg-item { padding: 7px 14px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
+.seg-item.active { background: var(--accent-soft); color: var(--accent-strong); border-color: transparent; font-weight: 600; }
+.seg-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pay-account { padding: 8px 10px; border-radius: var(--radius-sm); background: var(--field); border: 1px solid var(--border); overflow-wrap: anywhere; }
