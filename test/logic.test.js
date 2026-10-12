@@ -232,8 +232,10 @@ test('findUiText gives the middle of the words on the screen, wherever they are'
     + '</hierarchy>';
   assert.deepEqual(logic.findUiText(xml, 'โอนเงิน'), { x: 102, y: 1003, label: 'โอนเงิน' });
   assert.deepEqual(logic.findUiText(xml, ' ปิด '), { x: 669, y: 156, label: 'ปิด' });
-  // Words that only part of a label holds are found when nothing is exactly them.
-  assert.equal(logic.findUiText(xml, 'ไม่ใช้บัตร').label, 'ถอนเงินไม่ใช้บัตร');
+  // Part of a label is not the label: "ปิด" must never tap "เปิด…". Stars ask for a part.
+  assert.equal(logic.findUiText(xml, 'ไม่ใช้บัตร'), null);
+  assert.equal(logic.findUiText(xml, 'โอน'), null);
+  assert.equal(logic.findUiText(xml, '*ไม่ใช้บัตร*').label, 'ถอนเงินไม่ใช้บัตร');
   assert.equal(logic.findUiText(xml, 'tom & co').x, 50);
   assert.equal(logic.findUiText(xml, 'เลื่อนพ้นจอ'), null);
   assert.equal(logic.findUiText(xml, 'ไม่มีคำนี้'), null);

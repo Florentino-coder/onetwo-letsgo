@@ -26,3 +26,4 @@ app/packs/
 updates/pack-*
 updates/cancelled.json
 docs-shots/
+backups/*.json

@@ -754,17 +754,18 @@ const unescapeXml = (text) => String(text).replace(/&(#x?[0-9a-f]+|amp|lt|gt|quo
 /**
  * Where to tap for the words `wanted` in a phone's view tree (the XML of "uiautomator dump"):
  * the middle of the first thing on screen whose text, or whose description for screen readers,
- * is those words. Spaces and letter case are not told apart. When nothing is exactly the words,
- * the first thing that holds them is taken. Resolves with { x, y, label } in pixels, or null.
+ * is those words. Spaces and letter case are not told apart. Only the whole label counts: "ปิด"
+ * must not tap "เปิดบัญชี". Words written between stars, *like this*, are looked for inside
+ * longer labels instead. Resolves with { x, y, label } in pixels, or null.
  */
 function findUiText(xml, wanted) {
-  const goal = squashName(wanted);
+  const inside = /^\*.+\*$/.test(String(wanted).trim());
+  const goal = squashName(inside ? String(wanted).trim().slice(1, -1) : wanted);
   if (!goal) return null;
   const attribute = (node, name) => {
     const match = node.match(new RegExp(`\\s${name}="([^"]*)"`));
     return match ? unescapeXml(match[1]) : '';
   };
-  let holds = null;
   for (const [node] of String(xml).matchAll(/<node\s[^>]*>/g)) {
     const bounds = attribute(node, 'bounds').match(/^\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]$/);
     if (!bounds) continue;
@@ -774,11 +775,10 @@ function findUiText(xml, wanted) {
     const spot = { x: Math.round((left + right) / 2), y: Math.round((top + bottom) / 2) };
     for (const label of [attribute(node, 'text'), attribute(node, 'content-desc')]) {
       const said = squashName(label);
-      if (said === goal) return { ...spot, label };
-      if (!holds && said.includes(goal)) holds = { ...spot, label };
+      if (inside ? said.includes(goal) : said === goal) return { ...spot, label };
     }
   }
-  return holds;
+  return null;
 }
 
 /** A PIN as the app keeps one: 4 to 12 digits. */

@@ -406,7 +406,7 @@ function workflowBuilder(wf) {
     }
     if (step.command === 'text') return input(step.argument, setArgument(step), { placeholder: 'ข้อความที่จะพิมพ์' });
     // The words as the phone's screen shows them. The step waits for them, then taps them wherever they are.
-    if (step.command === 'taptext' || step.command === 'taptext?') return input(step.argument, setArgument(step), { placeholder: step.command === 'taptext' ? 'ข้อความบนจอ เช่น โอนเงิน หรือ {3}' : 'ข้อความบนจอ เช่น ปิด' });
+    if (step.command === 'taptext' || step.command === 'taptext?') return input(step.argument, setArgument(step), { placeholder: step.command === 'taptext' ? 'ข้อความบนจอทั้งคำ เช่น โอนเงิน หรือ {3} (ใส่ *คำ* เพื่อหาบางส่วน)' : 'ข้อความบนจอทั้งคำ เช่น ปิด' });
     if (step.command === 'run') {
       // A name with {3} in it runs the workflow named after that job's third value.
       const box = input(step.argument, setArgument(step), { placeholder: 'ชื่อเวิร์กโฟลว์ หรือ ธนาคาร-{3}' });
