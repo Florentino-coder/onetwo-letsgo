@@ -19,5 +19,5 @@
     "electron-builder": "^26.15.3"
   },
   "updateUrl": "https://raw.githubusercontent.com/Florentino-coder/onetwo-letsgo/main/updates/",
-  "userUpdateUrl": ""
+  "userUpdateUrl": "https://raw.githubusercontent.com/Florentino-coder/onetwo-adb-updates/main/updates/"
 }
