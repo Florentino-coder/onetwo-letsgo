@@ -229,6 +229,8 @@ test('parseImageList keeps new pictures, newest first', () => {
     { at: 1791492650, path: '/sdcard/Pictures/Bualuang mBanking/slip 1.png' },
   ]);
   assert.equal(logic.parseImageList(output).length, 3);
+  // A picture the phone is still writing is not offered.
+  assert.deepEqual(logic.parseImageList('1791492700|/sdcard/Pictures/.pending-1791492900-slip.jpg\n1791492650|/sdcard/Pictures/slip.jpg\n'), [{ at: 1791492650, path: '/sdcard/Pictures/slip.jpg' }]);
   assert.deepEqual(logic.parseImageList('', 0), []);
 });
 

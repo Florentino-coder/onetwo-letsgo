@@ -516,6 +516,9 @@ async function readSlip(serial, since) {
       fault = null;
     } catch (error) {
       fault = error;
+      // The phone gives a picture its final name once it is written: look for the newest again.
+      const [again] = await client.newImages(serial, since).catch(() => []);
+      if (again) newest = again;
     }
   }
   if (!bytes) throw fault || new Error('Unable to read the file from the phone.');

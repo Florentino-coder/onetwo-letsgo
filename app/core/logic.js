@@ -354,7 +354,9 @@ function parseImageList(output, since = 0) {
   const images = [];
   for (const line of String(output).split(/\r?\n/)) {
     const match = line.match(/^(\d+)\|(\/.+\.(?:jpe?g|png))\s*$/i);
-    if (match && Number(match[1]) >= since) images.push({ at: Number(match[1]), path: match[2] });
+    // A name that starts with a dot is a file the phone is still writing (".pending-…") or has
+    // thrown away: it is renamed or gone a moment later, so it is never the picture to read.
+    if (match && Number(match[1]) >= since && !/\/\.[^/]*$/.test(match[2])) images.push({ at: Number(match[1]), path: match[2] });
   }
   return images.sort((a, b) => b.at - a.at);
 }

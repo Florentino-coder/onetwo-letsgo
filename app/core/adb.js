@@ -216,7 +216,9 @@ class AdbClient {
     const result = await this.run(['exec-out', `cat ${quoted}`], { serial, timeout: 30000 });
     // exec-out does not pass on cat's exit code, and its error text arrives as if it were the file.
     if (result.code !== 0 || !result.stdout.length || result.stdout.subarray(0, 5).toString('latin1') === 'cat: ') {
-      throw new AdbError(result.stderr.trim() || 'Unable to read the file from the phone');
+      // What cat said, without the folders: "No such file or directory" tells a renamed file from a lost phone.
+      const said = result.stdout.subarray(0, 300).toString('utf8').trim().split(/\r?\n/)[0].replace(/\/\S*\//g, '');
+      throw new AdbError(result.stderr.trim() || (said.startsWith('cat: ') ? `Unable to read the file from the phone (${said.slice(5)})` : 'Unable to read the file from the phone'));
     }
     return result.stdout;
   }
