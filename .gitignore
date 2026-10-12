@@ -23,3 +23,5 @@ user-data/
 user-channel/
 dist/
 app/packs/
+updates/pack-*
+updates/cancelled.json

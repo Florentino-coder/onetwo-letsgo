@@ -257,7 +257,8 @@ function home() {
   const stopped = Object.entries(jobs.stops);
   const firstDone = jobs.history.some((entry) => entry.state === 'done');
   const out = signedOut();
-  const title = jobs.halt ? ['หยุดทำงาน', 'bad'] : out ? ['ยังไม่ได้ล็อกอินหลังบ้าน', ''] : !user.pack.current ? ['ยังไม่มีชุดงาน', ''] : jobs.payAuto ? ['กำลังทำงาน', ''] : ['พร้อม', ''];
+  const noPack = !user.pack.current;
+  const title = jobs.halt ? ['หยุดทำงาน', 'bad'] : noPack ? ['ยังไม่มีชุดงาน', 'bad'] : out ? ['ยังไม่ได้ล็อกอินหลังบ้าน', ''] : jobs.payAuto ? ['กำลังทำงาน', ''] : ['พร้อม', ''];
   const sub = jobs.halt ? `หยุดเมื่อ ${timeOf(jobs.halt.at)} · ไม่มีรายการใดถูกจ่ายต่อจนกว่าจะรีเซ็ต`
     : `${jobs.orders.at ? `ตรวจรายการล่าสุด ${timeOf(jobs.orders.at)}` : 'ยังไม่ได้ตรวจรายการ'} · ชุดงาน ${packName()}${jobs.payAuto ? '' : ' · จ่ายเองทีละรายการ'}`;
 
@@ -286,7 +287,12 @@ function home() {
       h('button', { class: `sw ${jobs.payAuto ? 'on' : ''}`, disabled: Boolean(jobs.halt) || out, onclick: () => act('jobs:payauto', { on: !jobs.payAuto }) }, h('i'), 'จ่ายอัตโนมัติ')),
     jobs.halt && stopBlock(jobs.halt, ''),
     stopped.map(([serial, stop]) => stopBlock(stop, serial)),
-    !jobs.halt && !out && !firstDone && h('div', { class: 'note' }, h('span', null, h('b', null, 'ลองหนึ่งรายการก่อน. '), 'ตั้งเครื่องให้ครบ แล้วกด "จ่าย" ที่รายการในคิวหนึ่งรายการ ดูให้จบจนขึ้น "ปิดงานแล้ว" จากนั้นจึงเปิดจ่ายอัตโนมัติได้')),
+    noPack && h('div', { class: 'alert' },
+      h('div', { class: 'x' }, h('b', null, 'โปรแกรมยังไม่มีชุดงาน จึงยังไม่ทำงาน'), h('div', null, 'ชุดงานคือขั้นตอนโอนและปิดงานจากผู้พัฒนา'), h('small', null, 'กด "ตรวจหาชุดงาน" เพื่อรับจากผู้พัฒนาทางอินเทอร์เน็ต หรือกด "นำเข้าจากไฟล์" ถ้าได้รับไฟล์ชุดงานมา')),
+      h('div', { class: 'acts' },
+        h('button', { class: 'btn', onclick: () => act('pack:import', {}, 'นำเข้าชุดงานแล้ว') }, 'นำเข้าจากไฟล์'),
+        h('button', { class: 'btn gold', onclick: async () => { const result = await ask('update:check'); if (result) S.state.update = result; const state = await ask('state:get'); if (state) S.state = state; toast(S.state.user.pack.current ? 'ได้รับชุดงานแล้ว' : 'ยังไม่มีชุดงานจากผู้พัฒนา', S.state.user.pack.current ? 'good' : 'bad'); render(true); } }, 'ตรวจหาชุดงาน'))),
+    !noPack && !jobs.halt && !out && !firstDone && h('div', { class: 'note' }, h('span', null, h('b', null, 'ลองหนึ่งรายการก่อน. '), 'ตั้งเครื่องให้ครบ แล้วกด "จ่าย" ที่รายการในคิวหนึ่งรายการ ดูให้จบจนขึ้น "ปิดงานแล้ว" จากนั้นจึงเปิดจ่ายอัตโนมัติได้')),
     h('div', { class: 'kpis' },
       h('div', { class: 'kpi' }, h('div', { class: 'l' }, 'จ่ายวันนี้'), h('div', { class: 'v gold' }, money(Object.values(jobs.spent).reduce((sum, value) => sum + value, 0)))),
       h('div', { class: 'kpi' }, h('div', { class: 'l' }, 'สำเร็จ'), h('div', { class: 'v' }, today.filter((entry) => entry.state === 'done').length)),
