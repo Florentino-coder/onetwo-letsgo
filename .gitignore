@@ -21,3 +21,5 @@ withdraw_ledger.json.tmp
 licenses.json
 user-data/
 user-channel/
+dist/
+app/packs/

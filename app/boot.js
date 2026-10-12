@@ -19,7 +19,7 @@ process.env.FARM_DATA_DIR = dataDir;
 // A development run of the user program keeps its window profile apart from the studio's, so both can be open.
 if (!app.isPackaged && EDITION === 'user' && !app.commandLine.hasSwitch('user-data-dir')) app.setPath('userData', path.join(dataDir, 'profile'));
 // Installed copies only: with this ID a development run shows the Electron icon on the taskbar.
-if (app.isPackaged) app.setAppUserModelId('com.adbonetwo.app');
+if (app.isPackaged) app.setAppUserModelId(EDITION === 'user' ? 'com.onetwoadb.user' : 'com.adbonetwo.app');
 
 const installed = require('../package.json').version;
 const updatesDir = path.join(dataDir, 'installed-updates');

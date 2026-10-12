@@ -26,12 +26,16 @@ async function findTesseract() {
   if (tesseract) return tesseract;
   const folders = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs')];
   const installed = folders.filter(Boolean).map((folder) => path.join(folder, 'Tesseract-OCR', 'tesseract.exe')).find((file) => fs.existsSync(file));
+  // An installed copy of the program brings its own reader, with its language data beside it.
+  const own = process.resourcesPath ? path.join(process.resourcesPath, 'tools', 'tesseract', 'tesseract.exe') : '';
+  const bundled = own && fs.existsSync(own) ? own : '';
   try {
-    const file = installed || 'tesseract';
-    const listed = (await run(file, ['--list-langs'])).split(/\r?\n/).map((line) => line.trim());
+    const file = bundled || installed || 'tesseract';
+    const data = bundled ? ['--tessdata-dir', path.join(path.dirname(bundled), 'tessdata')] : [];
+    const listed = (await run(file, [...data, '--list-langs'])).split(/\r?\n/).map((line) => line.trim());
     const languages = LANGUAGES.filter((language) => listed.includes(language));
     // Kept only when found, so installing Tesseract while the app is open is picked up.
-    if (languages.length) tesseract = { file, languages };
+    if (languages.length) tesseract = { file, languages, data };
   } catch {
     // Not installed.
   }
@@ -43,7 +47,7 @@ async function recognize(imagePath) {
   const found = await findTesseract();
   if (!found) throw new Error('Could not read the picture: Tesseract OCR is not installed on this computer.');
   try {
-    return (await run(found.file, [imagePath, 'stdout', '-l', found.languages.join('+')])).trim();
+    return (await run(found.file, [imagePath, 'stdout', ...found.data, '-l', found.languages.join('+')])).trim();
   } catch (error) {
     throw new Error(`Could not read the picture: ${error.message}`);
   }

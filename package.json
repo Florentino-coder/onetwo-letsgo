@@ -10,10 +10,13 @@
     "start:user": "set ONETWO_EDITION=user&& electron .",
     "test": "node --test",
     "icons": "electron tools/make-icons.js",
-    "release": "node tools/release.js"
+    "release": "node tools/release.js",
+    "build:user": "node tools/build-user.js",
+    "release:user": "node tools/release-user.js"
   },
   "devDependencies": {
-    "electron": "^44.5.1"
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3"
   },
   "updateUrl": "https://raw.githubusercontent.com/Florentino-coder/onetwo-letsgo/main/updates/",
   "userUpdateUrl": ""
