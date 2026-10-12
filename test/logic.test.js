@@ -222,6 +222,32 @@ test('verifyScreen checks the phone screen against the job', () => {
   assert.ok(logic.screenShows('053 1 58611 5', '0531586115'));
 });
 
+test('findUiText gives the middle of the words on the screen, wherever they are', () => {
+  const xml = '<?xml version="1.0"?><hierarchy rotation="0">'
+    + '<node index="0" text="" content-desc="ปิด" clickable="true" bounds="[646,133][691,178]" />'
+    + '<node index="1" text="" content-desc="โอนเงิน" clickable="true" bounds="[26,911][177,1095]"><node text="โอนเงิน" content-desc="" bounds="[30,1015][173,1049]" /></node>'
+    + '<node index="2" text="ถอนเงินไม่ใช้บัตร" content-desc="" bounds="[358,1015][501,1079]" />'
+    + '<node index="3" text="Tom &amp; Co" content-desc="" bounds="[0,0][100,40]" />'
+    + '<node index="4" text="เลื่อนพ้นจอ" content-desc="" bounds="[0,0][0,0]" />'
+    + '</hierarchy>';
+  assert.deepEqual(logic.findUiText(xml, 'โอนเงิน'), { x: 102, y: 1003, label: 'โอนเงิน' });
+  assert.deepEqual(logic.findUiText(xml, ' ปิด '), { x: 669, y: 156, label: 'ปิด' });
+  // Words that only part of a label holds are found when nothing is exactly them.
+  assert.equal(logic.findUiText(xml, 'ไม่ใช้บัตร').label, 'ถอนเงินไม่ใช้บัตร');
+  assert.equal(logic.findUiText(xml, 'tom & co').x, 50);
+  assert.equal(logic.findUiText(xml, 'เลื่อนพ้นจอ'), null);
+  assert.equal(logic.findUiText(xml, 'ไม่มีคำนี้'), null);
+  assert.equal(logic.findUiText(xml, ''), null);
+});
+
+test('taptext steps parse, need words, and take a job\'s values', () => {
+  const steps = logic.parseWorkflow('taptext? ปิด\ntaptext โอนเงิน\ntaptext {3}');
+  assert.deepEqual(steps.map((step) => [step.command, step.argument]), [['taptext?', 'ปิด'], ['taptext', 'โอนเงิน'], ['taptext', '{3}']]);
+  assert.throws(() => logic.parseWorkflow('taptext'), /expects the words/);
+  assert.equal(logic.workflowInputs(steps), 3);
+  assert.equal(logic.expandWorkflow(steps, ['a', 'b', 'ธนาคารกสิกรไทย'], {}, {}, '')[2].argument, 'ธนาคารกสิกรไทย');
+});
+
 test('parseImageList keeps new pictures, newest first', () => {
   const output = '1791492000|/sdcard/DCIM/Camera/old.jpg\r\n1791492700|/sdcard/Pictures/Bualuang mBanking/slip 2.JPG\n1791492650|/sdcard/Pictures/Bualuang mBanking/slip 1.png\nfind: /sdcard/Download: No such file\n1791492800|/sdcard/Download/notes.txt\n';
   assert.deepEqual(logic.parseImageList(output, 1791492600), [

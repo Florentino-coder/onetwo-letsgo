@@ -9,7 +9,9 @@ const KEY_ALIASES = {
   wake: 'KEYCODE_WAKEUP',
   sleep: 'KEYCODE_SLEEP',
 };
-const WORKFLOW_COMMANDS = new Set(['wait', 'keyevent', 'open', 'text', 'screenshot', 'tap', 'swipe', 'run', 'pick', 'pin', 'close', ...Object.keys(KEY_ALIASES)]);
+const WORKFLOW_COMMANDS = new Set(['wait', 'keyevent', 'open', 'text', 'screenshot', 'tap', 'swipe', 'run', 'pick', 'pin', 'close', 'taptext', 'taptext?', ...Object.keys(KEY_ALIASES)]);
+// Steps whose argument may hold {1}, {2}… of a job.
+const FILLED_COMMANDS = ['text', 'run', 'pick', 'taptext', 'taptext?'];
 const DEFAULT_SWIPE_MS = 300;
 const SCRCPY_PROFILES = {
   'Low bandwidth': { max_size: 720, max_fps: 15, bit_rate: '1M' },
@@ -295,6 +297,8 @@ function parseWorkflow(text) {
       if (!isPackage(argument)) throw new Error(`Line ${lineNo}: ${command} expects a package name such as com.android.settings.`);
     } else if (command === 'text') {
       if (!argument) throw new Error(`Line ${lineNo}: text expects an argument.`);
+    } else if (command === 'taptext' || command === 'taptext?') {
+      if (!argument) throw new Error(`Line ${lineNo}: ${command} expects the words to tap, for example 'taptext โอนเงิน'.`);
     } else if (command === 'run') {
       if (!argument) throw new Error(`Line ${lineNo}: run expects the name of a saved workflow, for example 'run bank-{3}'.`);
     } else if (command === 'pin') {
@@ -617,7 +621,7 @@ const INPUT_RE = /\{(\d{1,2})\}/g;
 function workflowInputs(steps) {
   let count = 0;
   for (const step of steps) {
-    if (!['text', 'run', 'pick'].includes(step.command)) continue;
+    if (!FILLED_COMMANDS.includes(step.command)) continue;
     for (const match of step.argument.matchAll(INPUT_RE)) count = Math.max(count, Number(match[1]));
   }
   return count;
@@ -654,7 +658,7 @@ const MAX_RUN_DEPTH = 3;
 function expandWorkflow(steps, values, workflows, sets, pin, trail = []) {
   const saved = workflows && typeof workflows === 'object' ? workflows : {};
   const flat = [];
-  for (const step of fillWorkflow(steps, values, ['text', 'run', 'pick'])) {
+  for (const step of fillWorkflow(steps, values, FILLED_COMMANDS)) {
     if (step.command === 'pick') {
       flat.push(...pickSteps(step, sets));
       continue;
@@ -738,6 +742,43 @@ const DEFAULT_PIN_GAP_MS = 800;
 function parsePin(argument) {
   const match = String(argument).trim().match(/^(\S+)(?:\s+(\d{1,5}))?$/);
   return match ? { set: match[1], gap: match[2] === undefined ? DEFAULT_PIN_GAP_MS : Number(match[2]) } : null;
+}
+
+const XML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+const unescapeXml = (text) => String(text).replace(/&(#x?[0-9a-f]+|amp|lt|gt|quot|apos);/gi, (whole, name) => {
+  if (name[0] !== '#') return XML_ENTITIES[name.toLowerCase()];
+  const code = name[1].toLowerCase() === 'x' ? Number.parseInt(name.slice(2), 16) : Number.parseInt(name.slice(1), 10);
+  return Number.isFinite(code) ? String.fromCodePoint(code) : whole;
+});
+
+/**
+ * Where to tap for the words `wanted` in a phone's view tree (the XML of "uiautomator dump"):
+ * the middle of the first thing on screen whose text, or whose description for screen readers,
+ * is those words. Spaces and letter case are not told apart. When nothing is exactly the words,
+ * the first thing that holds them is taken. Resolves with { x, y, label } in pixels, or null.
+ */
+function findUiText(xml, wanted) {
+  const goal = squashName(wanted);
+  if (!goal) return null;
+  const attribute = (node, name) => {
+    const match = node.match(new RegExp(`\\s${name}="([^"]*)"`));
+    return match ? unescapeXml(match[1]) : '';
+  };
+  let holds = null;
+  for (const [node] of String(xml).matchAll(/<node\s[^>]*>/g)) {
+    const bounds = attribute(node, 'bounds').match(/^\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]$/);
+    if (!bounds) continue;
+    const [left, top, right, bottom] = bounds.slice(1).map(Number);
+    // Something scrolled off the screen keeps its place in the tree with no size.
+    if (right <= left || bottom <= top) continue;
+    const spot = { x: Math.round((left + right) / 2), y: Math.round((top + bottom) / 2) };
+    for (const label of [attribute(node, 'text'), attribute(node, 'content-desc')]) {
+      const said = squashName(label);
+      if (said === goal) return { ...spot, label };
+      if (!holds && said.includes(goal)) holds = { ...spot, label };
+    }
+  }
+  return holds;
 }
 
 /** A PIN as the app keeps one: 4 to 12 digits. */
@@ -870,6 +911,7 @@ module.exports = {
   verifyScreen,
   parseSlip,
   bankCode,
+  findUiText,
   maskAgrees,
   parseWithdrawRow,
   parseSettlementRow,

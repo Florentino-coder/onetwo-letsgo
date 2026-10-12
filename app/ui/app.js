@@ -301,7 +301,7 @@ function updateSummary() {
 const WF_STEPS = [
   ['wake', 'ปลุกจอ'], ['home', 'หน้าแรก'], ['back', 'ย้อนกลับ'], ['recent', 'แอปล่าสุด'], ['sleep', 'ปิดจอ'],
   ['wait', 'รอ'], ['open', 'เปิดแอป'], ['close', 'ปิดแอป'], ['text', 'พิมพ์ข้อความ'], ['run', 'รันเวิร์กโฟลว์ย่อย'], ['pick', 'แตะตามชุดตำแหน่ง'], ['pin', 'กดรหัส PIN'], ['keyevent', 'กดปุ่ม'], ['screenshot', 'จับภาพหน้าจอ'],
-  ['tap', 'แตะที่ X, Y'], ['swipe', 'ปัดจาก X, Y'],
+  ['tap', 'แตะที่ X, Y'], ['swipe', 'ปัดจาก X, Y'], ['taptext', 'แตะที่ข้อความ'], ['taptext?', 'แตะข้อความ ถ้ามีบนจอ'],
 ];
 const WF_LABELS = { ...Object.fromEntries(WF_STEPS), tap: 'แตะ', swipe: 'ปัด', '#': 'หมายเหตุ' };
 const WF_DEFAULTS = { wait: '1000', keyevent: 'KEYCODE_ENTER' };
@@ -405,6 +405,8 @@ function workflowBuilder(wf) {
       return box;
     }
     if (step.command === 'text') return input(step.argument, setArgument(step), { placeholder: 'ข้อความที่จะพิมพ์' });
+    // The words as the phone's screen shows them. The step waits for them, then taps them wherever they are.
+    if (step.command === 'taptext' || step.command === 'taptext?') return input(step.argument, setArgument(step), { placeholder: step.command === 'taptext' ? 'ข้อความบนจอ เช่น โอนเงิน หรือ {3}' : 'ข้อความบนจอ เช่น ปิด' });
     if (step.command === 'run') {
       // A name with {3} in it runs the workflow named after that job's third value.
       const box = input(step.argument, setArgument(step), { placeholder: 'ชื่อเวิร์กโฟลว์ หรือ ธนาคาร-{3}' });
@@ -718,6 +720,8 @@ function stepText({ command, argument }) {
   const parts = argument.split(/\s+/);
   if (command === 'swipe' && isLongPress(parts)) return `กดค้างที่ X ${parts[0]}, Y ${parts[1]} นาน ${(Number(parts[4]) || 300) / 1000} วินาที`;
   if (command === 'wait') return `รอ ${Number(argument) / 1000} วินาที`;
+  if (command === 'taptext') return `แตะที่ข้อความ "${argument}"`;
+  if (command === 'taptext?') return `แตะที่ข้อความ "${argument}" ถ้ามีบนจอ`;
   if (command === 'open') return `เปิดแอป ${argument}`;
   if (command === 'close') return `ปิดแอป ${argument}`;
   if (command === 'text') return `พิมพ์ "${argument}"`;

@@ -36,6 +36,9 @@ const SLIP_TRIES = 30;
 const SLIP_RETRY_MS = 1500;
 // A slip's file is read up to this many times, until it has been written whole.
 const SLIP_PULL_TRIES = 8;
+// How long a "taptext" step waits for its words to come on the screen.
+const TAPTEXT_WAIT_MS = 12000;
+const TAPTEXT_RETRY_MS = 500;
 const API_DEFAULT_PORT = 8765;
 const API_MAX_BODY = 16 * 1024;
 const API_MAX_WAITING = 50;
@@ -706,6 +709,32 @@ async function runWorkflowStep(device, step, workflowName) {
       await guard(serial, workflowName, { allowManualOnly: true, requireCapture: true });
       await captureToFile(serial);
       return;
+    case 'taptext':
+    case 'taptext?': {
+      await guard(serial, workflowName);
+      // The words may not be on the screen yet: the screen is read again until they are. An
+      // optional step ("taptext?") looks once and goes on without them, such as for a notice
+      // that only some phones show.
+      const optional = step.command === 'taptext?';
+      const until = Date.now() + (optional ? 0 : TAPTEXT_WAIT_MS * payAccount(serial).scale);
+      let fault = null;
+      for (;;) {
+        try {
+          const spot = logic.findUiText(await requireAdb().uiDump(serial), step.argument);
+          if (spot) {
+            await requireAdb().tap(serial, spot.x, spot.y);
+            return `${spot.x} ${spot.y} px`;
+          }
+          fault = null;
+        } catch (error) {
+          fault = error;
+        }
+        if (Date.now() >= until) break;
+        await sleep(TAPTEXT_RETRY_MS);
+      }
+      if (optional) return 'not on the screen';
+      throw new Error(fault ? `The screen could not be read: ${fault.message}` : `"${step.argument}" is not on the screen.`);
+    }
     case 'tap':
     case 'swipe': {
       await guard(serial, workflowName);
