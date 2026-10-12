@@ -9,9 +9,11 @@ const KEY_ALIASES = {
   wake: 'KEYCODE_WAKEUP',
   sleep: 'KEYCODE_SLEEP',
 };
-const WORKFLOW_COMMANDS = new Set(['wait', 'keyevent', 'open', 'text', 'screenshot', 'tap', 'swipe', 'run', 'pick', 'pin', 'close', 'taptext', 'taptext?', ...Object.keys(KEY_ALIASES)]);
+const WORKFLOW_COMMANDS = new Set(['wait', 'keyevent', 'open', 'text', 'screenshot', 'tap', 'swipe', 'run', 'pick', 'pin', 'close', 'taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checkamount', 'stoptext', ...Object.keys(KEY_ALIASES)]);
+// Steps that read the phone's screen for words or values.
+const SCREEN_COMMANDS = ['taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checkamount', 'stoptext'];
 // Steps whose argument may hold {1}, {2}… of a job.
-const FILLED_COMMANDS = ['text', 'run', 'pick', 'taptext', 'taptext?'];
+const FILLED_COMMANDS = ['text', 'run', 'pick', ...SCREEN_COMMANDS];
 const DEFAULT_SWIPE_MS = 300;
 const SCRCPY_PROFILES = {
   'Low bandwidth': { max_size: 720, max_fps: 15, bit_rate: '1M' },
@@ -297,8 +299,8 @@ function parseWorkflow(text) {
       if (!isPackage(argument)) throw new Error(`Line ${lineNo}: ${command} expects a package name such as com.android.settings.`);
     } else if (command === 'text') {
       if (!argument) throw new Error(`Line ${lineNo}: text expects an argument.`);
-    } else if (command === 'taptext' || command === 'taptext?') {
-      if (!argument) throw new Error(`Line ${lineNo}: ${command} expects the words to tap, for example 'taptext โอนเงิน'.`);
+    } else if (SCREEN_COMMANDS.includes(command)) {
+      if (!argument) throw new Error(`Line ${lineNo}: ${command} expects the words to look for, for example '${command} โอนเงิน'.`);
     } else if (command === 'run') {
       if (!argument) throw new Error(`Line ${lineNo}: run expects the name of a saved workflow, for example 'run bank-{3}'.`);
     } else if (command === 'pin') {

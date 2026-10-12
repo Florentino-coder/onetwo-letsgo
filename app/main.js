@@ -12,6 +12,7 @@ const { AdbClient } = require('./core/adb');
 const { Store } = require('./core/store');
 const logic = require('./core/logic');
 const { zip } = require('./core/zip');
+const screen = require('./core/screen');
 const { checkForUpdate, validBaseUrl } = require('./updater');
 const { createJobs } = require('./jobs');
 const license = require('./license.js');
@@ -39,6 +40,24 @@ const SLIP_PULL_TRIES = 8;
 // How long a "taptext" step waits for its words to come on the screen.
 const TAPTEXT_WAIT_MS = 12000;
 const TAPTEXT_RETRY_MS = 500;
+// How long a "waittext" step waits for a page: a transfer can take the bank a while.
+const WAITTEXT_MS = 40000;
+// How a "scrolltap" step pages down a list, and how many pages it tries.
+const SCROLLTAP_SWIPE = '50% 70% 50% 35%';
+const SCROLLTAP_PAGES = 6;
+// A read of a phone's screen is slow (seconds). Steps that only look share one read; any step
+// that touches the phone, or waits, throws it away.
+const SCREEN_FRESH_MS = 8000;
+const SCREEN_STEPS = new Set(['taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checkamount', 'stoptext']);
+const screens = new Map();
+
+async function screenOf(serial, again) {
+  const kept = screens.get(serial);
+  if (!again && kept && Date.now() - kept.at < SCREEN_FRESH_MS) return kept.xml;
+  const xml = await requireAdb().uiDump(serial);
+  screens.set(serial, { xml, at: Date.now() });
+  return xml;
+}
 const API_DEFAULT_PORT = 8765;
 const API_MAX_BODY = 16 * 1024;
 const API_MAX_WAITING = 50;
@@ -684,6 +703,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function runWorkflowStep(device, step, workflowName) {
   const { serial } = device;
+  if (!SCREEN_STEPS.has(step.command)) screens.delete(serial);
   switch (step.command) {
     case 'wait':
       // A slow phone or connection is given longer at every wait.
@@ -710,21 +730,50 @@ async function runWorkflowStep(device, step, workflowName) {
       await captureToFile(serial);
       return;
     case 'taptext':
-    case 'taptext?': {
+    case 'taptext?':
+    case 'scrolltap': {
       await guard(serial, workflowName);
       // The words may not be on the screen yet: the screen is read again until they are. An
       // optional step ("taptext?") looks once and goes on without them, such as for a notice
-      // that only some phones show.
+      // that only some phones show. "scrolltap" pages down a list between looks.
       const optional = step.command === 'taptext?';
+      const scrolls = step.command === 'scrolltap';
       const until = Date.now() + (optional ? 0 : TAPTEXT_WAIT_MS * payAccount(serial).scale);
       let fault = null;
-      for (;;) {
+      let xml = '';
+      for (let look = 0; ; look += 1) {
         try {
-          const spot = logic.findUiText(await requireAdb().uiDump(serial), step.argument);
+          xml = await screenOf(serial, look > 0);
+          const spot = logic.findUiText(xml, step.argument);
           if (spot) {
             await requireAdb().tap(serial, spot.x, spot.y);
+            screens.delete(serial);
             return `${spot.x} ${spot.y} px`;
           }
+          fault = null;
+        } catch (error) {
+          fault = error;
+        }
+        if (scrolls ? look >= SCROLLTAP_PAGES : Date.now() >= until) break;
+        if (scrolls) {
+          const size = await requireAdb().screenSize(serial);
+          await requireAdb().swipe(serial, ...logic.gesturePixels(logic.parseGesture('swipe', SCROLLTAP_SWIPE).points, size), 600);
+          screens.delete(serial);
+        }
+        await sleep(TAPTEXT_RETRY_MS);
+      }
+      if (optional) return 'not on the screen';
+      throw new Error(fault ? `The screen could not be read: ${fault.message}` : `"${step.argument}" is not on the screen. The screen says: ${screen.gist(xml) || 'nothing'}`);
+    }
+    case 'waittext': {
+      // Wait for a page to come up, without touching it: the words say which page it is.
+      const until = Date.now() + WAITTEXT_MS * payAccount(serial).scale;
+      let xml = '';
+      let fault = null;
+      for (let look = 0; ; look += 1) {
+        try {
+          xml = await screenOf(serial, look > 0);
+          if (logic.findUiText(xml, step.argument)) return 'on the screen';
           fault = null;
         } catch (error) {
           fault = error;
@@ -732,8 +781,25 @@ async function runWorkflowStep(device, step, workflowName) {
         if (Date.now() >= until) break;
         await sleep(TAPTEXT_RETRY_MS);
       }
-      if (optional) return 'not on the screen';
-      throw new Error(fault ? `The screen could not be read: ${fault.message}` : `"${step.argument}" is not on the screen.`);
+      throw new Error(fault ? `The screen could not be read: ${fault.message}` : `"${step.argument}" did not come on the screen. The screen says: ${screen.gist(xml) || 'nothing'}`);
+    }
+    case 'checktext':
+    case 'checkamount': {
+      // Before a button that moves money is pressed, the page must show the job's own values.
+      const shows = step.command === 'checkamount' ? screen.showsAmount : (xml, value) => (/^[\d\s-]{6,}$/.test(value) ? screen.showsAccount(xml, value) : Boolean(logic.findUiText(xml, value)));
+      const until = Date.now() + TAPTEXT_WAIT_MS * payAccount(serial).scale;
+      for (let look = 0; ; look += 1) {
+        if (shows(await screenOf(serial, look > 0), step.argument)) return 'shown';
+        if (Date.now() >= until) break;
+        await sleep(TAPTEXT_RETRY_MS);
+      }
+      // The value is the job's, not the screen's: saying it tells nothing the job did not.
+      throw new Error(step.command === 'checkamount' ? `The phone's screen does not show the amount ${step.argument}. Nothing was confirmed.` : `The phone's screen does not show "${String(step.argument).replace(/\d(?=\d{4})/g, 'x')}". Nothing was confirmed.`);
+    }
+    case 'stoptext': {
+      // Words that mean the app refused: stop here and say so, rather than tap on blindly.
+      if (logic.findUiText(await screenOf(serial, false), step.argument)) throw new Error(`The phone shows "${step.argument}".`);
+      return 'not on the screen';
     }
     case 'tap':
     case 'swipe': {

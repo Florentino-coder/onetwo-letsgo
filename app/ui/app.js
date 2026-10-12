@@ -301,7 +301,8 @@ function updateSummary() {
 const WF_STEPS = [
   ['wake', 'ปลุกจอ'], ['home', 'หน้าแรก'], ['back', 'ย้อนกลับ'], ['recent', 'แอปล่าสุด'], ['sleep', 'ปิดจอ'],
   ['wait', 'รอ'], ['open', 'เปิดแอป'], ['close', 'ปิดแอป'], ['text', 'พิมพ์ข้อความ'], ['run', 'รันเวิร์กโฟลว์ย่อย'], ['pick', 'แตะตามชุดตำแหน่ง'], ['pin', 'กดรหัส PIN'], ['keyevent', 'กดปุ่ม'], ['screenshot', 'จับภาพหน้าจอ'],
-  ['tap', 'แตะที่ X, Y'], ['swipe', 'ปัดจาก X, Y'], ['taptext', 'แตะที่ข้อความ'], ['taptext?', 'แตะข้อความ ถ้ามีบนจอ'],
+  ['tap', 'แตะที่ X, Y'], ['swipe', 'ปัดจาก X, Y'], ['taptext', 'แตะที่ข้อความ'], ['taptext?', 'แตะข้อความ ถ้ามีบนจอ'], ['scrolltap', 'เลื่อนหาข้อความ แล้วแตะ'],
+  ['waittext', 'รอจนข้อความขึ้น'], ['checktext', 'ต้องเจอข้อความหรือเลขบัญชี'], ['checkamount', 'ต้องเจอยอดเงิน'], ['stoptext', 'ถ้าเจอข้อความ ให้หยุด'],
 ];
 const WF_LABELS = { ...Object.fromEntries(WF_STEPS), tap: 'แตะ', swipe: 'ปัด', '#': 'หมายเหตุ' };
 const WF_DEFAULTS = { wait: '1000', keyevent: 'KEYCODE_ENTER' };
@@ -406,6 +407,9 @@ function workflowBuilder(wf) {
     }
     if (step.command === 'text') return input(step.argument, setArgument(step), { placeholder: 'ข้อความที่จะพิมพ์' });
     // The words as the phone's screen shows them. The step waits for them, then taps them wherever they are.
+    if (['waittext', 'scrolltap', 'stoptext'].includes(step.command)) return input(step.argument, setArgument(step), { placeholder: 'ข้อความบนจอทั้งคำ เช่น รายการสำเร็จ หรือ {3}' });
+    if (step.command === 'checktext') return input(step.argument, setArgument(step), { placeholder: 'เลขบัญชี {1} หรือข้อความที่ต้องเจอบนจอ' });
+    if (step.command === 'checkamount') return input(step.argument, setArgument(step), { placeholder: 'ยอดเงิน เช่น {2}' });
     if (step.command === 'taptext' || step.command === 'taptext?') return input(step.argument, setArgument(step), { placeholder: step.command === 'taptext' ? 'ข้อความบนจอทั้งคำ เช่น โอนเงิน หรือ {3} (ใส่ *คำ* เพื่อหาบางส่วน)' : 'ข้อความบนจอทั้งคำ เช่น ปิด' });
     if (step.command === 'run') {
       // A name with {3} in it runs the workflow named after that job's third value.
@@ -720,6 +724,11 @@ function stepText({ command, argument }) {
   const parts = argument.split(/\s+/);
   if (command === 'swipe' && isLongPress(parts)) return `กดค้างที่ X ${parts[0]}, Y ${parts[1]} นาน ${(Number(parts[4]) || 300) / 1000} วินาที`;
   if (command === 'wait') return `รอ ${Number(argument) / 1000} วินาที`;
+  if (command === 'scrolltap') return `เลื่อนหา "${argument}" แล้วแตะ`;
+  if (command === 'waittext') return `รอจน "${argument}" ขึ้นบนจอ`;
+  if (command === 'checktext') return `ต้องเจอ "${argument}" บนจอ ไม่เจอให้หยุด`;
+  if (command === 'checkamount') return `ต้องเจอยอด ${argument} บนจอ ไม่เจอให้หยุด`;
+  if (command === 'stoptext') return `ถ้าเจอ "${argument}" ให้หยุด`;
   if (command === 'taptext') return `แตะที่ข้อความ "${argument}"`;
   if (command === 'taptext?') return `แตะที่ข้อความ "${argument}" ถ้ามีบนจอ`;
   if (command === 'open') return `เปิดแอป ${argument}`;
