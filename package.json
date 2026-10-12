@@ -1,7 +1,7 @@
 {
   "name": "adb-onetwo",
   "productName": "OneTwo ADB Studio",
-  "version": "0.21.0",
+  "version": "0.21.1",
   "private": true,
   "description": "OneTwo ADB Studio: builds and tests the workflows that OneTwo ADB pays with",
   "main": "app/boot.js",
