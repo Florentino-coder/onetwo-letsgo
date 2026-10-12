@@ -3,7 +3,7 @@
 // The window of OneTwo ADB, the program handed to other people. Three pages: home, history,
 // settings. Everything used daily is on the home page. All text is Thai, the faults too.
 
-const S = { state: null, page: 'home', wizard: 'link', signedIn: false, busy: false, stale: false };
+const S = { state: null, page: 'home', wizard: 'link', signedIn: false, busy: false, stale: false, find: { text: '', state: '', day: '' }, found: null };
 const SPEEDS = [[1.5, 'ช้า (เครื่องหรือเน็ตช้า)'], [1, 'ปกติ'], [0.8, 'เร็ว'], [0.6, 'เร็วมาก']];
 const BANK = 'ธนาคารกรุงเทพ';
 const PHONE_STATE = { running: 'กำลังโอน', checking: 'อ่านสลิป', closing: 'ปิดงาน', resting: 'กำลังพัก' };
@@ -72,6 +72,12 @@ const FAULTS = [
   [/pack is not signed by the owner|not a pack/, () => 'ไฟล์นี้ไม่ใช่ชุดงานจากผู้พัฒนา'],
   [/pack needs program version/, () => 'ชุดงานนี้ต้องใช้โปรแกรมรุ่นใหม่กว่า อัปเดตโปรแกรมก่อน'],
   [/Paste the activation code/, () => 'วางรหัสเปิดใช้ก่อน'],
+  [/not a bot token/, () => 'โทเค็นของบอตไม่ถูกต้อง คัดลอกจาก @BotFather อีกครั้ง'],
+  [/chat id is a number/, () => 'Chat ID ต้องเป็นตัวเลข เช่น 123456789'],
+  [/Enter the bot token and the chat id first/, () => 'ใส่โทเค็นของบอตและ Chat ID แล้วกดบันทึกก่อน'],
+  [/Telegram said: (.*)/, (m) => `Telegram ตอบว่า: ${m[1]} (ตรวจโทเค็น Chat ID และกด Start ที่บอตแล้วหรือยัง)`],
+  [/no slip picture kept/, () => 'ไม่มีรูปสลิปเก็บไว้สำหรับรายการนี้'],
+  [/slip picture is too large/, () => 'รูปสลิปใหญ่เกินกว่าจะแสดง'],
   [/not an activation code from the owner/, () => LICENSE_REASON.forged],
   [/code is for another computer/, () => LICENSE_REASON.machine],
   [/code has expired/, () => LICENSE_REASON.expired],
@@ -89,6 +95,28 @@ function thai(message) {
     if (match) return say(match);
   }
   return text;
+}
+
+let audio = null;
+/** Three short tones: something needs the operator. No sound file is needed. */
+function beep() {
+  try {
+    audio = audio || new AudioContext();
+    [0, 0.28, 0.56].forEach((start, index) => {
+      const tone = audio.createOscillator();
+      const level = audio.createGain();
+      tone.type = 'sine';
+      tone.frequency.value = index === 2 ? 660 : 880;
+      level.gain.setValueAtTime(0.0001, audio.currentTime + start);
+      level.gain.exponentialRampToValueAtTime(0.35, audio.currentTime + start + 0.02);
+      level.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + start + 0.22);
+      tone.connect(level).connect(audio.destination);
+      tone.start(audio.currentTime + start);
+      tone.stop(audio.currentTime + start + 0.24);
+    });
+  } catch {
+    // No sound device: the notice on the screen still shows.
+  }
 }
 
 function toast(text, kind = '') {
@@ -265,7 +293,7 @@ function home() {
 
   const phoneRow = (view) => h('button', { class: 'row phone', onclick: () => openPhone(view.device.serial) },
     h('span', null, view.device.label),
-    h('span', { class: 'c' }, `${tail(view.device.pay.account)}${view.balance !== null ? ` · ${whole(view.balance)}` : ''}`),
+    h('span', { class: 'c' }, `${tail(view.device.pay.account)}${view.balance !== null ? ` · ${whole(view.balance)}` : ''}`, view.device.drops ? h('span', { class: view.device.drops >= 3 ? 'bad' : 'run', title: 'จำนวนครั้งที่เครื่องหลุดการเชื่อมต่อใน 1 ชั่วโมงที่ผ่านมา' }, ` · หลุด ${view.device.drops}`) : null),
     h('span', { class: `st ${view.word[1]}` }, view.word[0]));
 
   const orderRow = (order) => {
@@ -313,26 +341,72 @@ function home() {
   ]);
 }
 
-function history() {
-  const { jobs, devices } = S.state;
+/** One row of the history, as the history page and a search both show it. */
+function historyRow(entry) {
+  const { devices } = S.state;
   const label = (serial) => (devices.find((device) => device.serial === serial) || { label: serial || '—' }).label;
-  const row = (entry) => {
-    const state = ROW_STATE[entry.state] || [entry.state, 'wait'];
-    const open = entry.state === 'started' || entry.state === 'paid' || entry.state === 'failed';
-    return h('div', { class: 'row past' },
-      h('span', { class: 'c' }, `${dayOf(entry.at)} ${timeOf(entry.at).slice(0, 5)}`),
-      h('span', { class: 'a' }, money(entry.amount)),
-      h('span', { class: 'who', title: `${entry.holder || ''} · ${entry.bank}` }, h('span', null, entry.holder || '—'), h('small', null, entry.bank)),
-      h('span', { class: 'acct' }, entry.account),
-      h('span', { class: 'b' }, entry.phone || label(entry.serial)),
-      h('span', { class: `st ${state[1]}` }, open && entry.state !== 'failed' ? h('button', { class: 'lk', onclick: () => act('jobs:resolve', { key: entry.key, note: 'ตรวจด้วยมือ' }, 'บันทึกว่าจัดการแล้ว') }, `${state[0]} · จัดการแล้ว`) : state[0]));
-  };
-  return shell([
+  const state = ROW_STATE[entry.state] || [entry.state, 'wait'];
+  const open = entry.state === 'started' || entry.state === 'paid';
+  return h('div', { class: 'row past' },
+    h('span', { class: 'c' }, `${dayOf(entry.at)} ${timeOf(entry.at).slice(0, 5)}`),
+    h('span', { class: 'a' }, money(entry.amount)),
+    h('span', { class: 'who', title: `${entry.holder || ''} · ${entry.bank}` }, h('span', null, entry.holder || '—'), h('small', null, entry.bank)),
+    h('span', { class: 'acct' }, entry.account),
+    h('span', { class: 'b' }, entry.phone || label(entry.serial)),
+    h('span', null, entry.slip ? h('button', { class: 'lk', onclick: () => openSlip(entry) }, 'ดูสลิป') : h('span', { class: 'wait' }, '—')),
+    h('span', { class: `st ${state[1]}` }, open ? h('button', { class: 'lk', onclick: () => act('jobs:resolve', { key: entry.key, note: 'ตรวจด้วยมือ' }, 'บันทึกว่าจัดการแล้ว') }, `${state[0]} · จัดการแล้ว`) : state[0]));
+}
+
+const searching = () => Boolean(S.find.text || S.find.state || S.find.day);
+
+/** Fill the list of the history page from what it should show now, without drawing the page again. */
+function drawHistoryList() {
+  const list = $('history-list');
+  if (!list) return;
+  const rows = searching() && S.found ? S.found : S.state.jobs.history;
+  list.replaceChildren(...(rows.length ? rows.map(historyRow) : [h('div', { class: 'empty' }, searching() ? 'ไม่พบรายการที่ตรงกับที่ค้นหา' : 'ยังไม่มีรายการ')]));
+  $('history-count').textContent = searching() ? `พบ ${rows.length} รายการ${rows.length === 500 ? ' (แสดง 500 รายการแรก)' : ''}` : `${rows.length} รายการล่าสุด`;
+}
+
+let findTimer = null;
+function runFind() {
+  clearTimeout(findTimer);
+  findTimer = setTimeout(async () => {
+    S.find = { text: $('find-text').value.trim(), state: $('find-state').value, day: $('find-day').value };
+    S.found = searching() ? await ask('history:search', S.find) : null;
+    drawHistoryList();
+  }, 250);
+}
+
+function history() {
+  const states = [['', 'ทุกสถานะ'], ['done', 'ปิดงานแล้ว'], ['paid', 'จ่ายแล้ว รอปิดงาน'], ['started', 'ค้าง ต้องตรวจ'], ['failed', 'ไม่สำเร็จ'], ['resolved', 'จัดการแล้ว']];
+  const page = shell([
     h('div', { class: 'mh' }, h('div', null, h('div', { class: 't' }, 'ประวัติ'), h('div', { class: 's' }, 'ทุกรายการที่โปรแกรมเริ่มจ่าย ใหม่สุดอยู่บน เก็บในเครื่องนี้เท่านั้น'))),
+    h('div', { class: 'finder' },
+      h('input', { class: 'inp plain', id: 'find-text', value: S.find.text, placeholder: 'ค้นหา เลขบัญชี ชื่อบัญชี ธนาคาร หรือยอด', spellcheck: 'false', oninput: runFind }),
+      h('select', { class: 'inp plain', id: 'find-state', onchange: runFind }, states.map(([value, name]) => h('option', { value, selected: value === S.find.state }, name))),
+      h('input', { class: 'inp plain', id: 'find-day', type: 'date', value: S.find.day, onchange: runFind }),
+      h('button', { class: 'lk', onclick: () => { S.find = { text: '', state: '', day: '' }; S.found = null; render(true); } }, 'ล้าง'),
+      h('span', { class: 'sp' }),
+      h('span', { class: 'hint', id: 'history-count' })),
     h('div', { class: 'pane' },
-      h('div', { class: 'row past head' }, ['เวลา', 'ยอด (บาท)', 'ชื่อบัญชี / ธนาคาร', 'เลขบัญชี', 'เครื่องที่จ่าย', 'สถานะ'].map((name, index) => h('span', { class: index === 1 ? 'a' : index === 5 ? 'st' : '' }, name))),
-      h('div', { class: 'list' }, jobs.history.length ? jobs.history.map(row) : h('div', { class: 'empty' }, 'ยังไม่มีรายการ'))),
+      h('div', { class: 'row past head' }, ['เวลา', 'ยอด (บาท)', 'ชื่อบัญชี / ธนาคาร', 'เลขบัญชี', 'เครื่องที่จ่าย', 'สลิป', 'สถานะ'].map((name, index) => h('span', { class: index === 1 ? 'a' : index === 6 ? 'st' : '' }, name))),
+      h('div', { class: 'list', id: 'history-list' })),
   ]);
+  // The list is filled once the page is in the window: it is found by its id.
+  queueMicrotask(drawHistoryList);
+  return page;
+}
+
+async function openSlip(entry) {
+  const data = await ask('slip:view', { key: entry.key });
+  if (!data) return;
+  const close = () => $('modal').replaceChildren();
+  $('modal').replaceChildren(h('div', { class: 'veil', onmousedown: (event) => { if (event.target === event.currentTarget) close(); } },
+    h('div', { class: 'sheet slip' },
+      h('div', { class: 'acts' }, h('div', { class: 't' }, `สลิป ${money(entry.amount)}`), h('span', { class: 'sp' }), h('button', { class: 'btn', onclick: close }, 'ปิด')),
+      h('div', { class: 'hint' }, `${entry.holder || ''} · ${entry.bank} ${entry.account} · ${dayOf(entry.at)} ${timeOf(entry.at)}`),
+      h('img', { src: data.image, alt: 'สลิป' }))));
 }
 
 function settings() {
@@ -373,6 +447,21 @@ function settings() {
         line('ออกให้', h('span', { class: 'v plain' }, license.name || '—')),
         line('ใช้ได้ถึง', h('span', { class: 'v plain' }, license.expires ? `${license.expires} (เหลือ ${Math.max(0, license.daysLeft)} วัน)` : 'ไม่จำกัดวัน')),
         line('รหัสเครื่อง', h('span', { class: 'v' }, license.machine)))),
+    h('div', { class: 'two' },
+      h('div', { class: 'pane' },
+        h('div', { class: 'h' }, 'การแจ้งเตือน'),
+        line('เสียงเตือน', h('span', { class: 'v plain' }, 'เมื่อเครื่องหยุด เงินหมด หรือเครื่องหลุด'), h('button', { class: `sw ${user.sound ? 'on' : ''}`, onclick: () => act('user:prefs', { sound: !user.sound }) }, h('i'))),
+        line('Telegram', h('span', { class: `v plain ${user.telegram.on ? 'ok' : 'wait'}` }, user.telegram.on ? 'เปิดอยู่' : user.telegram.hasToken ? 'ปิดอยู่' : 'ยังไม่ได้ตั้ง'),
+          h('button', { class: `sw ${user.telegram.on ? 'on' : ''}`, onclick: () => act('telegram:set', { on: !user.telegram.on }) }, h('i'))),
+        line('โทเค็นของบอต', h('input', { class: 'inp', id: 'tg-token', type: 'password', autocomplete: 'off', spellcheck: 'false', placeholder: user.telegram.hasToken ? 'ตั้งแล้ว ใส่เมื่อจะเปลี่ยน' : '123456789:AA...' })),
+        line('Chat ID', h('input', { class: 'inp', id: 'tg-chat', value: user.telegram.chat, spellcheck: 'false', placeholder: '123456789' }),
+          h('button', { class: 'lk', onclick: () => act('telegram:set', { token: $('tg-token').value.trim(), chat: $('tg-chat').value.trim() }, 'บันทึกแล้ว') }, 'บันทึก'),
+          h('button', { class: 'lk', onclick: async () => { if (await ask('telegram:test')) toast('ส่งข้อความทดสอบแล้ว ดูใน Telegram', 'good'); } }, 'ส่งทดสอบ')),
+        h('div', { class: 'hint pad' }, 'วิธีตั้ง: ใน Telegram คุยกับ @BotFather พิมพ์ /newbot แล้วคัดลอกโทเค็นมาวาง จากนั้นเปิดบอตของคุณแล้วกด Start และถาม @userinfobot เพื่อดู Chat ID ของคุณ')),
+      h('div', { class: 'pane' },
+        h('div', { class: 'h' }, 'ช่วยเหลือ'),
+        line('รายงานปัญหา', h('span', { class: 'v plain' }, 'รวมบันทึกและประวัติเป็นไฟล์เดียว'), h('button', { class: 'lk', onclick: async () => { const made = await ask('report:save'); if (made && made.saved) toast('บันทึกไฟล์รายงานแล้ว ส่งไฟล์นี้ให้ผู้พัฒนา', 'good'); } }, 'สร้างไฟล์')),
+        h('div', { class: 'hint pad' }, 'ในไฟล์มีบันทึกการทำงาน ประวัติรายการ และรายชื่อเครื่อง ไม่มี PIN ไม่มีรหัสเปิดใช้ ไม่มีโทเค็น Telegram ส่งให้ผู้พัฒนาเมื่อโปรแกรมทำงานผิดปกติ'))),
   ]);
 }
 
@@ -472,6 +561,7 @@ async function start() {
   window.farm.on('jobs', (jobs) => { S.state.jobs = jobs; render(); });
   window.farm.on('devices', (data) => { absorb(data); render(); });
   window.farm.on('update', (update) => { S.state.update = update; render(); });
+  window.farm.on('alert', (alert) => { toast(alert.text, 'bad'); if (S.state.user.sound) beep(); });
   document.addEventListener('focusout', () => setTimeout(() => { if (S.stale) render(); }, 150));
   render(true);
   await checkSignedIn();

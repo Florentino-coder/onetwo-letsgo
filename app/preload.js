@@ -14,8 +14,9 @@ const CALLS = [
   'folder:open', 'update:check', 'update:restart',
   'handout:view', 'handout:issue', 'handout:cancel', 'handout:pack', 'handout:release',
   'license:set', 'pack:import', 'pack:rollback', 'user:setup', 'user:signed',
+  'slip:view', 'history:search', 'report:save', 'telegram:set', 'telegram:test', 'user:prefs',
 ];
-const EVENTS = ['log', 'devices', 'thumb', 'job', 'status', 'update', 'timeline', 'touch', 'jobs', 'state'];
+const EVENTS = ['log', 'devices', 'thumb', 'job', 'status', 'update', 'timeline', 'touch', 'jobs', 'state', 'alert'];
 
 contextBridge.exposeInMainWorld('farm', {
   call(channel, payload) {

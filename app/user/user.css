@@ -2,15 +2,17 @@
 @font-face { font-family: "Sarabun"; font-weight: 500; src: url("../ui/fonts/Sarabun-Medium.ttf") format("truetype"); }
 @font-face { font-family: "Sarabun"; font-weight: 600; src: url("../ui/fonts/Sarabun-SemiBold.ttf") format("truetype"); }
 @font-face { font-family: "Sarabun"; font-weight: 700; src: url("../ui/fonts/Sarabun-Bold.ttf") format("truetype"); }
-@font-face { font-family: "Trirong"; font-weight: 600; src: url("fonts/Trirong-SemiBold.ttf") format("truetype"); }
+@font-face { font-family: "Anuphan"; font-weight: 100 700; src: url("fonts/Anuphan.ttf") format("truetype"); }
 
 /* Ink, ivory and one muted gold. Green and red say state only. No shadow, no gradient, no motion. */
 :root {
   --ink: #0c0f15; --panel: #141821; --panel2: #1a1f2a; --line: #272d3a; --text: #ece8df; --muted: #8f8c85;
   --gold: #c9a65e; --gold-soft: rgba(201, 166, 94, .13); --good: #74c79a; --bad: #e0736a; --bad-soft: rgba(224, 115, 106, .12);
-  --display: "Trirong", "Sarabun", "Leelawadee UI", serif;
-  --body: "Sarabun", "Leelawadee UI", "Segoe UI", sans-serif;
-  --mono: "IBM Plex Mono", "Cascadia Mono", "Consolas", monospace;
+  --display: "Anuphan", "Sarabun", "Leelawadee UI", sans-serif;
+  --body: "Anuphan", "Sarabun", "Leelawadee UI", "Segoe UI", sans-serif;
+  /* Figures: the same face, every digit one width so amounts line up. */
+  --mono: "Anuphan", "Sarabun", "Leelawadee UI", sans-serif;
+  --code: "Cascadia Mono", "Consolas", monospace;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -56,7 +58,7 @@ button, input, select { font: inherit; color: inherit; }
 .kpi .v.bad { color: var(--bad); }
 
 .cols { display: grid; grid-template-columns: minmax(270px, 330px) minmax(0, 1fr); gap: 18px; min-height: 0; flex: 1; }
-.two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; flex: none; }
 .pane { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .pane .h { font-size: 12px; letter-spacing: .08em; color: var(--muted); display: flex; margin-bottom: 6px; flex: none; }
 .pane .h b { margin-left: auto; font-weight: 500; letter-spacing: 0; }
@@ -71,7 +73,14 @@ button, input, select { font: inherit; color: inherit; }
 .row.order { grid-template-columns: 84px minmax(0, 1fr) 106px 116px; }
 .row.order .st { white-space: normal; }
 .row > * { min-width: 0; }
-.row.past { grid-template-columns: 84px 96px minmax(140px, 1fr) 128px 110px 150px; }
+.row.past { grid-template-columns: 84px 96px minmax(140px, 1fr) 128px 104px 52px 150px; }
+.finder { display: flex; gap: 10px; align-items: center; flex: none; flex-wrap: wrap; }
+.finder .inp { width: auto; padding: 8px 12px; }
+.finder #find-text { flex: 1 1 260px; max-width: 420px; }
+.sheet.slip { width: min(520px, 100%); }
+.sheet.slip img { max-width: 100%; max-height: 68vh; object-fit: contain; border-radius: 8px; align-self: center; }
+.hint.pad { padding-top: 10px; }
+.line .inp { flex: 1; min-width: 0; padding: 7px 11px; }
 .row.head { color: var(--muted); font-size: 12px; padding: 4px 0 8px; border-top: 0; border-bottom: 1px solid var(--line); flex: none; }
 .row.head .a { font-family: var(--body); font-size: 12px; }
 .who { display: flex; flex-direction: column; min-width: 0; line-height: 1.35; }
@@ -136,9 +145,10 @@ button, input, select { font: inherit; color: inherit; }
 .inp { border: 1px solid var(--line); background: var(--panel); border-radius: 7px; padding: 10px 13px; font-family: var(--mono); font-size: 13.5px; width: 100%; outline: none; user-select: text; }
 .inp:focus { border-color: var(--gold); }
 .inp.plain { font-family: var(--body); font-size: 14px; }
-textarea.inp { resize: none; height: 96px; word-break: break-all; }
+textarea.inp { resize: none; height: 96px; word-break: break-all; font-family: var(--code); }
+body { font-variant-numeric: tabular-nums; }
 select.inp { appearance: none; }
-.code { font-family: var(--mono); font-size: 24px; letter-spacing: .08em; color: var(--gold); user-select: text; }
+.code { font-family: var(--code); font-size: 24px; letter-spacing: .08em; color: var(--gold); user-select: text; }
 .okline { color: var(--good); font-size: 13px; }
 .badline { color: var(--bad); font-size: 13px; }
 .acts { display: flex; gap: 10px; align-items: center; }

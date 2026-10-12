@@ -995,6 +995,7 @@ function createJobs(host) {
     host.store.saveConfig();
     audit('halt', key, { message });
     host.log(`Withdrawals stopped: ${message}`, 'error');
+    if (host.notify) host.notify('หยุดทำงานทั้งหมด: ปิดงานในหลังบ้านไม่สำเร็จ ตรวจรายการก่อนรีเซ็ต');
   }
 
   /** Stop one phone: a fault on that phone. The others go on paying. */
@@ -1591,7 +1592,33 @@ function createJobs(host) {
     if (window) window.destroy();
   }
 
-  return { view, save, open, pick, record, clear, read, runOnce, setAuto, screen, close, refreshOrders, pay, setPayAuto, unhalt, resolve, switchAccount, signedIn };
+  /** The picture of the slip kept for a row, as a file path; '' when there is none. */
+  function slipFile(key) {
+    return ledger[key] ? slipOf(ledger[key]) : '';
+  }
+
+  /**
+   * Rows of the whole history, newest first: `text` is looked for in the account number, the
+   * account's name, the bank and the amount; `state` is a row's state; `day` is YYYY-MM-DD by
+   * this computer's clock. At most 500 come back.
+   */
+  function search({ text, state, day } = {}) {
+    const wanted = String(text || '').trim().toLowerCase();
+    const digits = wanted.replace(/[\s,-]/g, '');
+    const local = (at) => {
+      const date = new Date(at);
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    };
+    return Object.entries(ledger)
+      .filter(([, entry]) => (!state || entry.state === state) && (!day || local(entry.at) === day))
+      .filter(([, entry]) => !wanted || [entry.holder, entry.bank, entry.phone].some((field) => String(field || '').toLowerCase().includes(wanted))
+        || (digits && [entry.account, String(entry.amount).replace(/,/g, '')].some((field) => String(field || '').includes(digits))))
+      .map(([key, entry]) => ({ key, ...entry, slip: slipOf(entry) }))
+      .sort((a, b) => String(b.at).localeCompare(String(a.at)))
+      .slice(0, 500);
+  }
+
+  return { view, save, open, pick, record, clear, read, runOnce, setAuto, screen, close, refreshOrders, pay, setPayAuto, unhalt, resolve, switchAccount, signedIn, slipFile, search };
 }
 
 module.exports = { createJobs };

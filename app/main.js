@@ -11,6 +11,7 @@ const path = require('node:path');
 const { AdbClient } = require('./core/adb');
 const { Store } = require('./core/store');
 const logic = require('./core/logic');
+const { zip } = require('./core/zip');
 const { checkForUpdate, validBaseUrl } = require('./updater');
 const { createJobs } = require('./jobs');
 const license = require('./license.js');
@@ -119,7 +120,68 @@ function licenseState() {
 }
 
 function userView() {
-  return { license: licenseState(), pack: packs.view(), developer: DEVELOPER, setupDone: Boolean(store.config.user_setup_done) };
+  const kept = telegramKept();
+  return {
+    license: licenseState(), pack: packs.view(), developer: DEVELOPER, setupDone: Boolean(store.config.user_setup_done),
+    sound: store.config.user_sound !== false,
+    telegram: { on: kept.on, chat: kept.chat, hasToken: Boolean(kept.token) },
+  };
+}
+
+// ── telling the operator, wherever they are ─────────────────────────────
+// Telegram is told through the operator's own bot. The bot's token is kept encrypted by Windows
+// for this account (see secret.js) and is never logged.
+const telegramKept = () => {
+  const kept = store.config.telegram && typeof store.config.telegram === 'object' ? store.config.telegram : {};
+  return { on: kept.on === true, chat: typeof kept.chat === 'string' ? kept.chat : '', token: typeof kept.token === 'string' ? kept.token : '' };
+};
+let telegramToken = { kept: '', value: '' };
+
+async function telegramSend(text) {
+  const kept = telegramKept();
+  if (!kept.token || !kept.chat) throw new Error('Enter the bot token and the chat id first.');
+  if (telegramToken.kept !== kept.token) telegramToken = { kept: kept.token, value: secret.reveal(kept.token) };
+  const response = await fetch(`https://api.telegram.org/bot${telegramToken.value}/sendMessage`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ chat_id: kept.chat, text: `${APP_NAME} · ${store.config.node_name || os.hostname()}\n${text}` }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) {
+    const answer = await response.json().catch(() => ({}));
+    throw new Error(`Telegram said: ${answer.description || `HTTP ${response.status}`}`);
+  }
+}
+
+/** Something the operator should know now: a notice on this computer, a sound in the window, and Telegram when set up. */
+function alertUser(text) {
+  if (Notification.isSupported()) new Notification({ title: APP_NAME, body: text }).show();
+  send('alert', { text, at: Date.now() });
+  if (telegramKept().on) telegramSend(text).catch((error) => log(`The Telegram message was not sent: ${error.message}`, 'warning'));
+}
+
+// A phone that keeps dropping off its cable fails in the middle of a job sooner or later.
+// Each drop of a phone that was online is counted for an hour.
+const DROP_WINDOW_MS = 3600000;
+const DROP_ALERT_AT = 3;
+const DROP_QUIET_MS = 10 * 60000;
+const drops = new Map();
+const dropTold = new Map();
+
+function dropsOf(serial) {
+  const recent = (drops.get(serial) || []).filter((at) => Date.now() - at < DROP_WINDOW_MS);
+  drops.set(serial, recent);
+  return recent.length;
+}
+
+function noteDrop(serial, label) {
+  drops.set(serial, [...(drops.get(serial) || []), Date.now()]);
+  const count = dropsOf(serial);
+  // Only phones that pay are worth a message, and not more often than every ten minutes each.
+  if (deviceMeta(serial).pay_on === false || amountRange(serial).min === null) return;
+  if (Date.now() - (dropTold.get(serial) || 0) < DROP_QUIET_MS) return;
+  dropTold.set(serial, Date.now());
+  alertUser(count >= DROP_ALERT_AT ? `${label}: หลุดการเชื่อมต่อ ${count} ครั้งใน 1 ชั่วโมง ตรวจสาย USB หรือพอร์ต` : `${label}: หลุดการเชื่อมต่อ`);
 }
 
 // Sets saved by an older version lack fields added since; give every set its full shape once.
@@ -141,9 +203,7 @@ const jobs = createJobs({
   send: (channel, payload) => send(channel, payload),
   log: (message, level) => log(message, level),
   // Something the operator should see even with the window out of sight.
-  notify: (body) => {
-    if (Notification.isSupported()) new Notification({ title: APP_NAME, body }).show();
-  },
+  notify: (body) => alertUser(body),
   runWorkflow: (request) => runWorkflow(request),
   runWorkflowOne: (request) => runWorkflowOne(request),
   closeProfile: (url) => packCloseProfile(url),
@@ -266,6 +326,7 @@ function deviceView(device) {
     slot: meta.slot || '',
     label: deviceLabel(device),
     liveProfile: meta.live_profile || '',
+    drops: dropsOf(device.serial),
     hasPin: Boolean(meta.pin),
     amountMin: amountRange(device.serial).min,
     amountMax: amountRange(device.serial).max,
@@ -276,7 +337,12 @@ function deviceView(device) {
 }
 
 function devicesSnapshot() {
-  return [...devices.values()].map(deviceView);
+  const seen = [...devices.values()].map(deviceView);
+  if (!USER) return seen;
+  // The user program goes on showing a phone it has settings for when the phone is unplugged.
+  const gone = Object.keys(store.state.devices).filter((serial) => !devices.has(serial) && (deviceMeta(serial).pay_account || deviceMeta(serial).amount_min))
+    .map((serial) => deviceView({ serial, status: 'offline', model: '' }));
+  return [...seen, ...gone];
 }
 
 function onlineDevices(serials) {
@@ -340,11 +406,15 @@ async function scan() {
       if (!previous) log(`Discovered ${deviceLabel(device)} (${device.serial}) as ${device.status}.`, 'info', device.serial);
       else if (previous.status !== device.status) {
         log(`Status changed for ${deviceLabel(device)}: ${previous.status} -> ${device.status}.`, 'info', device.serial);
+        if (previous.status === 'device') noteDrop(device.serial, deviceLabel(device));
       }
       next.set(device.serial, { ...device, lastSeen: now });
     }
     for (const [serial, previous] of devices) {
-      if (!next.has(serial)) log(`Device disappeared: ${serial} was ${previous.status}.`, 'warning', serial);
+      if (!next.has(serial)) {
+        log(`Device disappeared: ${serial} was ${previous.status}.`, 'warning', serial);
+        if (previous.status === 'device') noteDrop(serial, deviceLabel(previous));
+      }
     }
     devices = next;
     evaluateHealth(list);
@@ -1062,6 +1132,7 @@ const USER_CALLS = new Set([
   'jobs:set', 'jobs:open', 'jobs:orders', 'jobs:pay', 'jobs:payauto', 'jobs:unhalt', 'jobs:resolve',
   'folder:open', 'update:check', 'update:restart',
   'license:set', 'pack:import', 'pack:rollback', 'user:setup', 'user:signed',
+  'slip:view', 'history:search', 'report:save', 'telegram:set', 'telegram:test', 'user:prefs',
 ]);
 // And of those, what it may ask for before it is activated.
 const UNLICENSED_CALLS = new Set(['state:get', 'license:set', 'update:check', 'update:restart', 'folder:open']);
@@ -1706,6 +1777,79 @@ function registerIpc() {
   });
 
   handle('user:signed', async () => ({ signedIn: await jobs.signedIn() }));
+
+  handle('user:prefs', ({ sound }) => {
+    if (sound !== undefined) store.config.user_sound = Boolean(sound);
+    store.saveConfig();
+    return publicState();
+  });
+
+  // The slip kept for a row of the history, as a picture the window can show.
+  handle('slip:view', ({ key }) => {
+    const file = jobs.slipFile(String(key || ''));
+    if (!file || !fs.existsSync(file)) throw new Error('There is no slip picture kept for that row.');
+    if (fs.statSync(file).size > 12 * 1024 * 1024) throw new Error('The slip picture is too large to show.');
+    const type = /\.png$/i.test(file) ? 'image/png' : 'image/jpeg';
+    return { image: `data:${type};base64,${fs.readFileSync(file).toString('base64')}` };
+  });
+
+  handle('history:search', (filter) => jobs.search(filter));
+
+  handle('telegram:set', ({ token, chat, on }) => {
+    const next = { ...telegramKept() };
+    if (chat !== undefined) {
+      const value = String(chat).trim();
+      if (value && !/^(-?\d{4,20}|@\w{4,40})$/.test(value)) throw new Error('A chat id is a number, such as 123456789.');
+      next.chat = value;
+    }
+    if (token) {
+      const value = String(token).trim();
+      if (!/^\d{6,12}:[\w-]{30,60}$/.test(value)) throw new Error('That is not a bot token.');
+      next.token = secret.protect(value);
+    }
+    if (on !== undefined) next.on = Boolean(on) && Boolean(next.token) && Boolean(next.chat);
+    if (on && !next.on) throw new Error('Enter the bot token and the chat id first.');
+    store.config.telegram = next;
+    store.saveConfig();
+    log(`Telegram messages ${next.on ? 'on' : 'off'}.`);
+    return publicState();
+  });
+
+  handle('telegram:test', async () => {
+    await telegramSend('ข้อความทดสอบ: การแจ้งเตือนทำงานแล้ว');
+    return { sent: true };
+  });
+
+  // One file for the developer when something goes wrong: the logs and the history, with no PIN,
+  // no activation code and no token inside.
+  handle('report:save', async () => {
+    const tail = (file, lines) => {
+      try {
+        return fs.readFileSync(path.join(baseDir, file), 'utf8').split(/\r?\n/).slice(-lines).join('\n');
+      } catch {
+        return '';
+      }
+    };
+    const about = {
+      program: APP_NAME, version: VERSION, at: new Date().toISOString(), computer: store.config.node_name || os.hostname(),
+      license: (({ ok, reason, name, expires, id }) => ({ ok, reason, name, expires, id }))(licenseState()),
+      pack: USER ? packs.view() : null,
+      tools: { adb: adb ? adb.adbPath : null },
+      phones: devicesSnapshot().map((device) => ({ serial: device.serial, model: device.model, label: device.label, online: device.online, payOn: device.payOn, hasPin: device.hasPin, hasAccount: Boolean(device.pay.account), range: [device.amountMin, device.amountMax], scale: device.pay.scale, drops: device.drops })),
+      stops: jobs.view().stops, halt: jobs.view().halt,
+    };
+    const files = {
+      'about.json': JSON.stringify(about, null, 2),
+      'events.jsonl': tail('farm_manager_events.jsonl', 5000),
+      'withdraw_audit.jsonl': tail('withdraw_audit.jsonl', 5000),
+      'withdraw_ledger.json': tail('withdraw_ledger.json', 200000),
+    };
+    const result = await dialog.showSaveDialog(win, { title: 'Save the report', defaultPath: `onetwo-report-${stamp()}.zip`, filters: [{ name: 'Zip', extensions: ['zip'] }] });
+    if (result.canceled || !result.filePath) return { saved: '' };
+    fs.writeFileSync(result.filePath, zip(files));
+    log('A problem report was saved.');
+    return { saved: result.filePath };
+  });
 
   handle('update:restart', () => {
     if (jobRunning) throw new Error(`Wait for "${jobRunning}" to finish first.`);
