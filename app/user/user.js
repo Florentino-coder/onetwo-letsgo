@@ -184,7 +184,7 @@ function wizardSteps(now) {
       h('span', null, names[key], key === 'code' && license.ok && h('small', null, `ออกโดย ${S.state.user.developer}`)));
   };
   return h('div', { class: 'steps' },
-    h('div', { class: 'brand' }, 'OneTwo ', h('span', null, 'ADB')),
+    h('div', { class: 'brand' }, h('img', { src: '../assets/icon.png', alt: '' }), 'OneTwo ', h('span', null, 'ADB')),
     order.map(mark),
     h('div', { class: 'stepmark' }, h('span', { class: 'd' }, 4), h('span', null, 'เครื่องและบัญชี', h('small', null, 'ตั้งที่หน้าหลัก'))),
     h('div', { class: 'stepmark' }, h('span', { class: 'd' }, 5), h('span', null, 'ลองหนึ่งรายการ', h('small', null, 'กดจ่ายเองที่หน้าหลัก'))),
@@ -223,7 +223,7 @@ function shell(content) {
   const days = user.license.daysLeft;
   return h('div', { class: 'shell' },
     h('div', { class: 'rail' },
-      h('div', { class: 'brand' }, 'OneTwo ', h('span', null, 'ADB')),
+      h('div', { class: 'brand' }, h('img', { src: '../assets/icon.png', alt: '' }), 'OneTwo ', h('span', null, 'ADB')),
       nav('home', 'หน้าหลัก'), nav('history', 'ประวัติ'), nav('settings', 'ตั้งค่า'),
       h('div', { class: 'foot' },
         h('div', null, 'หลังบ้าน: ', signedOut() ? h('span', { class: 'bad' }, jobs.open ? 'ยังไม่ล็อกอิน' : 'ยังไม่เปิด') : h('span', { class: 'good' }, 'ล็อกอินอยู่')),
@@ -237,7 +237,7 @@ function stopBlock(stop, serial) {
   const { jobs } = S.state;
   const entry = jobs.history.find((each) => each.key === stop.key);
   const device = S.state.devices.find((each) => each.serial === serial);
-  const about = entry ? `รายการ ${money(entry.amount)} ไป${entry.bank || ''} ${tail(entry.account)}` : 'ไม่มีรายการที่เกี่ยวข้อง';
+  const about = entry ? `รายการ ${money(entry.amount)} ไป${entry.bank || ''} ${entry.account}${entry.holder ? ` (${entry.holder})` : ''}` : 'ไม่มีรายการที่เกี่ยวข้อง';
   const open = entry && entry.state !== 'done' && entry.state !== 'resolved';
   return h('div', { class: 'alert' },
     h('div', { class: 'x' },
@@ -257,6 +257,7 @@ function home() {
   const stopped = Object.entries(jobs.stops);
   const firstDone = jobs.history.some((entry) => entry.state === 'done');
   const out = signedOut();
+  const online = devices.filter((device) => device.online).length;
   const noPack = !user.pack.current;
   const title = jobs.halt ? ['หยุดทำงาน', 'bad'] : noPack ? ['ยังไม่มีชุดงาน', 'bad'] : out ? ['ยังไม่ได้ล็อกอินหลังบ้าน', ''] : jobs.payAuto ? ['กำลังทำงาน', ''] : ['พร้อม', ''];
   const sub = jobs.halt ? `หยุดเมื่อ ${timeOf(jobs.halt.at)} · ไม่มีรายการใดถูกจ่ายต่อจนกว่าจะรีเซ็ต`
@@ -276,13 +277,16 @@ function home() {
     else if (!order.serial) status = h('span', { class: 'st wait' }, { cap: 'เครื่องถึงเพดาน', balance: 'เงินในเครื่องไม่พอ', off: 'บัญชีเครื่องปิดอยู่', stopped: 'เครื่องหยุดอยู่' }[order.short] || 'ไม่มีเครื่องรับยอดนี้');
     else if (jobs.payAuto) status = h('span', { class: 'st wait' }, `รอ · ${order.phone}`);
     else status = h('span', { class: 'st' }, h('button', { class: 'btn small gold', disabled: Boolean(jobs.halt) || out, onclick: () => act('jobs:pay', { key: order.key }) }, `จ่าย · ${order.phone}`));
-    return h('div', { class: 'row order' }, h('span', { class: 'a' }, money(order.amount)), h('span', { class: 'b' }, order.bank), h('span', { class: 'c' }, tail(order.account)), status);
+    return h('div', { class: 'row order' }, h('span', { class: 'a' }, money(order.amount)),
+      h('span', { class: 'who', title: `${order.holder || ''} · ${order.bank}` }, h('span', null, order.holder || '—'), h('small', null, order.bank)),
+      h('span', { class: 'acct' }, order.account), status);
   };
 
   return shell([
     h('div', { class: 'mh' },
       h('div', null, h('div', { class: `t ${title[1]}` }, title[0]), h('div', { class: 's' }, sub)),
       h('span', { class: 'sp' }),
+      h('span', { class: `count ${online ? 'ok' : 'bad'}` }, h('i'), `ออนไลน์ ${online} จาก ${devices.length} เครื่อง`),
       out && !jobs.halt && h('button', { class: 'btn gold', onclick: () => act('jobs:open') }, jobs.open ? 'แสดงหน้าต่างหลังบ้าน' : 'เปิดหน้าล็อกอิน'),
       h('button', { class: `sw ${jobs.payAuto ? 'on' : ''}`, disabled: Boolean(jobs.halt) || out, onclick: () => act('jobs:payauto', { on: !jobs.payAuto }) }, h('i'), 'จ่ายอัตโนมัติ')),
     jobs.halt && stopBlock(jobs.halt, ''),
@@ -304,6 +308,7 @@ function home() {
         h('div', { class: 'list' }, phones.length ? phones.map(phoneRow) : h('div', { class: 'empty' }, S.state.tools.adb ? 'ยังไม่พบเครื่อง เสียบสาย USB และเปิดการแก้ไขข้อบกพร่อง USB ที่มือถือ' : 'ไม่พบตัวเชื่อมต่อมือถือ (ADB) ในคอมเครื่องนี้ ติดตั้งโปรแกรมใหม่ หรือแจ้งผู้พัฒนา'))),
       h('div', { class: 'pane' },
         h('div', { class: 'h' }, 'คิว', h('b', null, 'เรียงตามที่หลังบ้านแสดง')),
+        orders.length ? h('div', { class: 'row order head' }, h('span', { class: 'a' }, 'ยอด (บาท)'), h('span', null, 'ชื่อบัญชี / ธนาคาร'), h('span', null, 'เลขบัญชี'), h('span', { class: 'st' }, 'สถานะ')) : null,
         h('div', { class: 'list' }, orders.length ? orders.map(orderRow) : h('div', { class: 'empty' }, out ? 'ล็อกอินหลังบ้านเพื่อดูรายการ' : 'ไม่มีรายการในช่วงยอดของเครื่อง')))),
   ]);
 }
@@ -317,14 +322,16 @@ function history() {
     return h('div', { class: 'row past' },
       h('span', { class: 'c' }, `${dayOf(entry.at)} ${timeOf(entry.at).slice(0, 5)}`),
       h('span', { class: 'a' }, money(entry.amount)),
-      h('span', { class: 'b' }, entry.bank),
-      h('span', { class: 'c' }, tail(entry.account)),
+      h('span', { class: 'who', title: `${entry.holder || ''} · ${entry.bank}` }, h('span', null, entry.holder || '—'), h('small', null, entry.bank)),
+      h('span', { class: 'acct' }, entry.account),
       h('span', { class: 'b' }, entry.phone || label(entry.serial)),
       h('span', { class: `st ${state[1]}` }, open && entry.state !== 'failed' ? h('button', { class: 'lk', onclick: () => act('jobs:resolve', { key: entry.key, note: 'ตรวจด้วยมือ' }, 'บันทึกว่าจัดการแล้ว') }, `${state[0]} · จัดการแล้ว`) : state[0]));
   };
   return shell([
     h('div', { class: 'mh' }, h('div', null, h('div', { class: 't' }, 'ประวัติ'), h('div', { class: 's' }, 'ทุกรายการที่โปรแกรมเริ่มจ่าย ใหม่สุดอยู่บน เก็บในเครื่องนี้เท่านั้น'))),
-    h('div', { class: 'pane' }, h('div', { class: 'list' }, jobs.history.length ? jobs.history.map(row) : h('div', { class: 'empty' }, 'ยังไม่มีรายการ'))),
+    h('div', { class: 'pane' },
+      h('div', { class: 'row past head' }, ['เวลา', 'ยอด (บาท)', 'ชื่อบัญชี / ธนาคาร', 'เลขบัญชี', 'เครื่องที่จ่าย', 'สถานะ'].map((name, index) => h('span', { class: index === 1 ? 'a' : index === 5 ? 'st' : '' }, name))),
+      h('div', { class: 'list' }, jobs.history.length ? jobs.history.map(row) : h('div', { class: 'empty' }, 'ยังไม่มีรายการ'))),
   ]);
 }
 

@@ -962,7 +962,7 @@ function createJobs(host) {
   }
 
   function mark(order, state, detail = {}) {
-    ledger[order.key] = { ...ledger[order.key], state, at: new Date().toISOString(), account: order.account, amount: order.amount, bank: order.bank, requested: order.requested, ...detail };
+    ledger[order.key] = { ...ledger[order.key], state, at: new Date().toISOString(), account: order.account, holder: order.holder || (ledger[order.key] || {}).holder || '', amount: order.amount, bank: order.bank, requested: order.requested, ...detail };
     const temp = `${ledgerFile}.tmp`;
     fs.writeFileSync(temp, JSON.stringify(ledger, null, 2), 'utf8');
     fs.renameSync(temp, ledgerFile);
