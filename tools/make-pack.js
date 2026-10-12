@@ -2,7 +2,8 @@
 
 // Owner-only tool. Builds the signed work pack from the studio's saved settings, without opening
 // the studio:
-//   node tools/make-pack.js BBL 1.0.0
+//   node tools/make-pack.js BBL 1.0.0 [--no-rest]
+// --no-rest leaves the workflow for an idle phone out of the pack, whatever the studio has chosen.
 // It writes the pack in two places: app/packs/default.onetwopack, which the next installer of
 // OneTwo ADB brings along, and updates/ with pack-latest.json, which `npm run release:user` puts
 // on the user channel for every user program. The studio's own button does the same for one
@@ -13,7 +14,7 @@ const logic = require('../app/core/logic.js');
 const pack = require('../app/pack.js');
 
 const root = path.join(__dirname, '..');
-const [name, version] = process.argv.slice(2);
+const [name, version, ...flags] = process.argv.slice(2);
 const read = (file) => JSON.parse(fs.readFileSync(path.join(root, file), 'utf8'));
 
 function main() {
@@ -22,7 +23,8 @@ function main() {
   if (!fs.existsSync(keyFile)) throw new Error('ไม่พบ update-private.pem ในโฟลเดอร์โปรแกรม เครื่องนี้ลงชื่อไม่ได้');
   const pkg = read('package.json');
   const state = read('farm_manager_devices.json');
-  const jobs = read('farm_manager_config.json').jobs || {};
+  const jobs = { ...read('farm_manager_config.json').jobs };
+  if (flags.includes('--no-rest')) jobs.rest = '';
   if (!jobs.workflow) throw new Error('ยังไม่ได้เลือกเวิร์กโฟลว์ที่ใช้จ่าย (เมนู "รับงานจากเว็บ" ข้อ 3)');
 
   const workflows = {};
