@@ -79,6 +79,9 @@ const MAX_STEPS = 20;
 const MIN_STEP_WAIT_MS = 300;
 const MAX_STEP_WAIT_MS = 15000;
 const STEP_TIMEOUT_MS = 8000;
+// How often a row that is not on the page is looked for again before closing gives up, and the wait before each.
+const CLOSE_ROW_RETRIES = 4;
+const CLOSE_ROW_RETRY_MS = 1500;
 
 // Closing a job by profile: the engine and the site profiles of ClipSync's browser extension,
 // run in the back-office window itself. The engine file is ClipSync's, unchanged.
@@ -826,7 +829,18 @@ function createJobs(host) {
     await settle(contents);
     await loadEngine(contents);
     const began = Date.now();
-    const result = await contents.executeJavaScript(closeScript({ ...profile, dry_run: current.closeDry }, [...(rowKeys || []), slip.amount], slip, hints), true);
+    const script = closeScript({ ...profile, dry_run: current.closeDry }, [...(rowKeys || []), slip.amount], slip, hints);
+    let result = await contents.executeJavaScript(script, true);
+    // Phones finish close to each other, and the page draws its list again after each job that
+    // is closed: a row looked for in that moment is not there yet. Nothing was pressed, so the
+    // list is read again and the row looked for again.
+    for (let attempt = 0; attempt < CLOSE_ROW_RETRIES && !result.ok && result.reason === 'row_not_found'; attempt += 1) {
+      await sleep(CLOSE_ROW_RETRY_MS);
+      await readOrdersNow(true).catch(() => {});
+      await settle(contents);
+      await loadEngine(contents);
+      result = await contents.executeJavaScript(script, true);
+    }
     // How long closing took, and the steps that took a second or more: this is where to look when it is slow.
     const slow = (result.steps || []).map(([action, ms], index) => ({ step: index + 1, action, ms })).filter((step) => step.ms === null || step.ms >= 1000);
     audit('close', key, { ms: Date.now() - began, slow, message: `${((Date.now() - began) / 1000).toFixed(1)}s${slow.length ? ` · ${slow.map((step) => `ขั้น ${step.step} ${step.action} ${step.ms === null ? 'ไม่จบ' : `${(step.ms / 1000).toFixed(1)}s`}`).join(', ')}` : ''}` });
