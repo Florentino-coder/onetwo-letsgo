@@ -2,6 +2,7 @@
 @font-face { font-family: "Sarabun"; font-weight: 500; src: url("../ui/fonts/Sarabun-Medium.ttf") format("truetype"); }
 @font-face { font-family: "Sarabun"; font-weight: 600; src: url("../ui/fonts/Sarabun-SemiBold.ttf") format("truetype"); }
 @font-face { font-family: "Sarabun"; font-weight: 700; src: url("../ui/fonts/Sarabun-Bold.ttf") format("truetype"); }
+@font-face { font-family: "Trirong"; font-weight: 600; src: url("fonts/Trirong-SemiBold.ttf") format("truetype"); }
 
 /* Ink, ivory and one muted gold. Green and red say state only. No shadow, no gradient, no motion. */
 :root {
@@ -23,7 +24,7 @@ button, input, select { font: inherit; color: inherit; }
 /* ── shell ── */
 .shell { display: grid; grid-template-columns: 196px 1fr; height: 100%; }
 .rail { border-right: 1px solid var(--line); padding: 26px 16px 20px; display: flex; flex-direction: column; gap: 4px; }
-.brand { font-family: var(--display); font-weight: 600; font-size: 22px; padding: 0 10px 22px; letter-spacing: .01em; }
+.brand { font-family: var(--display); font-weight: 600; font-size: 21px; padding: 0 10px 22px; letter-spacing: .01em; white-space: nowrap; }
 .brand span { color: var(--gold); }
 .nav { padding: 10px 12px; border-radius: 7px; color: var(--muted); background: none; border: 0; text-align: left; cursor: pointer; }
 .nav:hover { color: var(--text); }

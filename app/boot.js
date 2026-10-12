@@ -13,10 +13,24 @@ process.env.ONETWO_EDITION = EDITION;
 
 // The studio keeps the window profile it always had, under its old name: the back-office sign-in lives there.
 if (EDITION !== 'user' && !app.commandLine.hasSwitch('user-data-dir')) app.setPath('userData', path.join(app.getPath('appData'), 'ADB-OneTwo'));
+/**
+ * The owner's installed studio may be pointed at the folder its data already lives in, by a file
+ * data-folder.txt in its window profile holding that folder's path. One folder means one history
+ * of payments, whichever way the studio was started.
+ */
+function pointedDataDir() {
+  try {
+    const dir = fs.readFileSync(path.join(app.getPath('userData'), 'data-folder.txt'), 'utf8').trim();
+    return dir && fs.existsSync(dir) ? dir : '';
+  } catch {
+    return '';
+  }
+}
+
 // Dev runs keep data beside the code, where the Python app kept it. Installed builds use userData.
 // Resolved here, not in main.js, because main.js may be running from an update folder.
 const dataDir = process.env.FARM_DATA_DIR
-  || (app.isPackaged ? app.getPath('userData') : path.join(__dirname, '..', EDITION === 'user' ? 'user-data' : ''));
+  || (app.isPackaged ? (EDITION !== 'user' && pointedDataDir()) || app.getPath('userData') : path.join(__dirname, '..', EDITION === 'user' ? 'user-data' : ''));
 process.env.FARM_DATA_DIR = dataDir;
 // A development run of the user program keeps its window profile apart from the studio's, so both can be open.
 if (!app.isPackaged && EDITION === 'user' && !app.commandLine.hasSwitch('user-data-dir')) app.setPath('userData', path.join(dataDir, 'profile'));
