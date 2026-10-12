@@ -26,8 +26,9 @@ button, input, select { font: inherit; color: inherit; }
 /* ── shell ── */
 .shell { display: grid; grid-template-columns: 212px 1fr; height: 100%; }
 .rail { border-right: 1px solid var(--line); padding: 26px 16px 20px; display: flex; flex-direction: column; gap: 4px; }
-.brand { font-family: var(--display); font-weight: 600; font-size: 20px; padding: 0 8px 22px; letter-spacing: .01em; white-space: nowrap; }
-.brand span { color: var(--gold); }
+.brand { font-family: var(--display); font-weight: 600; font-size: 20px; padding: 0 8px 22px; letter-spacing: .01em; white-space: nowrap; display: flex; align-items: center; gap: 11px; line-height: 1.15; }
+.brand .by { font-family: var(--body); font-weight: 400; font-size: 11.5px; letter-spacing: .04em; color: var(--muted); margin-top: 3px; }
+.brand .name span { color: var(--gold); }
 .nav { padding: 10px 12px; border-radius: 7px; color: var(--muted); background: none; border: 0; text-align: left; cursor: pointer; }
 .nav:hover { color: var(--text); }
 .nav.on { background: var(--gold-soft); color: var(--gold); font-weight: 600; }
@@ -90,7 +91,7 @@ button, input, select { font: inherit; color: inherit; }
 .count { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); border: 1px solid var(--line); border-radius: 20px; padding: 5px 14px; white-space: nowrap; }
 .count i { width: 8px; height: 8px; border-radius: 50%; background: var(--good); display: block; }
 .count.bad i { background: var(--bad); }
-.brand img { width: 24px; height: 24px; border-radius: 6px; vertical-align: -4px; margin-right: 9px; }
+.brand img { width: 34px; height: 34px; border-radius: 8px; flex: none; }
 .row.step { grid-template-columns: 28px 1fr auto; }
 .a { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; font-size: 14px; }
 .b { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

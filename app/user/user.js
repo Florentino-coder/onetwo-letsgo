@@ -185,6 +185,12 @@ const packName = () => {
   return current ? `${current.name} ${current.version}` : 'ยังไม่มีชุดงาน';
 };
 
+/** The program's mark: its icon, its name, and who made it underneath. */
+function brandMark() {
+  return h('div', { class: 'brand' }, h('img', { src: '../assets/icon.png', alt: '' }),
+    h('div', null, h('div', { class: 'name' }, 'OneTwo ', h('span', null, 'ADB')), h('div', { class: 'by' }, `By ${S.state.user.developer}`)));
+}
+
 // ── pages ────────────────────────────────────────────────────────────────
 
 function activation() {
@@ -212,7 +218,7 @@ function wizardSteps(now) {
       h('span', null, names[key], key === 'code' && license.ok && h('small', null, `ออกโดย ${S.state.user.developer}`)));
   };
   return h('div', { class: 'steps' },
-    h('div', { class: 'brand' }, h('img', { src: '../assets/icon.png', alt: '' }), 'OneTwo ', h('span', null, 'ADB')),
+    brandMark(),
     order.map(mark),
     h('div', { class: 'stepmark' }, h('span', { class: 'd' }, 4), h('span', null, 'เครื่องและบัญชี', h('small', null, 'ตั้งที่หน้าหลัก'))),
     h('div', { class: 'stepmark' }, h('span', { class: 'd' }, 5), h('span', null, 'ลองหนึ่งรายการ', h('small', null, 'กดจ่ายเองที่หน้าหลัก'))),
@@ -251,7 +257,7 @@ function shell(content) {
   const days = user.license.daysLeft;
   return h('div', { class: 'shell' },
     h('div', { class: 'rail' },
-      h('div', { class: 'brand' }, h('img', { src: '../assets/icon.png', alt: '' }), 'OneTwo ', h('span', null, 'ADB')),
+      brandMark(),
       nav('home', 'หน้าหลัก'), nav('history', 'ประวัติ'), nav('settings', 'ตั้งค่า'),
       h('div', { class: 'foot' },
         h('div', null, 'หลังบ้าน: ', signedOut() ? h('span', { class: 'bad' }, jobs.open ? 'ยังไม่ล็อกอิน' : 'ยังไม่เปิด') : h('span', { class: 'good' }, 'ล็อกอินอยู่')),

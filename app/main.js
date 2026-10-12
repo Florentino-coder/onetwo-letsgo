@@ -1888,7 +1888,7 @@ function createWindow() {
     height: USER ? 780 : 920,
     minWidth: USER ? 1000 : 1120,
     minHeight: USER ? 660 : 700,
-    title: APP_NAME,
+    title: USER ? `${APP_NAME} - ${DEVELOPER}` : APP_NAME,
     backgroundColor: USER ? '#0c0f15' : dark ? '#0a0d16' : '#f3f4f8',
     autoHideMenuBar: true,
     icon: path.join(__dirname, 'assets', 'icon.png'),
