@@ -13,6 +13,8 @@ const { Store } = require('./core/store');
 const logic = require('./core/logic');
 const { checkForUpdate } = require('./updater');
 const { createJobs } = require('./jobs');
+const license = require('./license.js');
+const pack = require('./pack.js');
 const ocr = require('./ocr');
 const secret = require('./secret');
 
@@ -1383,6 +1385,96 @@ function registerIpc() {
   handle('jobs:resolve', ({ key, note }) => jobs.resolve(String(key || ''), note));
 
   handle('update:check', () => runUpdateCheck());
+
+  // ── handing the program to other people: activation codes and work packs ──
+  // Only the owner's computer holds the private key; without it these do nothing.
+  const handoutKeyFile = path.join(baseDir, 'update-private.pem');
+  const handoutListFile = path.join(baseDir, 'licenses.json');
+  const handoutPublicKey = () => fs.readFileSync(path.join(__dirname, 'update-public.pem'), 'utf8');
+  const handoutKey = () => {
+    if (!fs.existsSync(handoutKeyFile)) throw new Error('The owner\'s private key (update-private.pem) is not on this computer, so nothing can be signed here.');
+    return fs.readFileSync(handoutKeyFile, 'utf8');
+  };
+  const handoutList = () => {
+    try {
+      const kept = JSON.parse(fs.readFileSync(handoutListFile, 'utf8'));
+      return Array.isArray(kept) ? kept : [];
+    } catch {
+      return [];
+    }
+  };
+  const handoutView = () => ({ canSign: fs.existsSync(handoutKeyFile), licenses: handoutList().slice().reverse(), version: VERSION });
+  const keepHandoutList = (list) => {
+    fs.writeFileSync(handoutListFile, JSON.stringify(list, null, 2), 'utf8');
+    // The list of cancelled codes goes out with the updates: the programs read it when they check.
+    const cancelled = list.filter((each) => each.cancelled).map((each) => each.id);
+    fs.mkdirSync(path.join(baseDir, 'updates'), { recursive: true });
+    fs.writeFileSync(path.join(baseDir, 'updates', 'cancelled.json'), license.signCancelled(cancelled, handoutKey()), 'utf8');
+  };
+
+  handle('handout:view', () => handoutView());
+
+  handle('handout:issue', ({ machine, name, expires, offlineDays }) => {
+    const made = license.issue({ machine, name, expires: String(expires || '').trim() || null, offlineDays }, handoutKey());
+    // A code that this program's own public key does not accept would be of no use to anyone.
+    const tried = license.check(made.code, handoutPublicKey(), { machine });
+    if (!tried.ok) throw new Error('The private key on this computer does not match the program\'s public key, so the code would not be accepted.');
+    keepHandoutList([...handoutList(), { ...made.note, code: made.code, cancelled: false }]);
+    log(`Activation code issued for ${made.note.name || made.note.machine}.`);
+    return { ...handoutView(), code: made.code };
+  });
+
+  handle('handout:cancel', ({ id, cancelled }) => {
+    const list = handoutList();
+    const entry = list.find((each) => each.id === id);
+    if (!entry) throw new Error('That code is not in the list.');
+    entry.cancelled = cancelled !== false;
+    entry.cancelledAt = entry.cancelled ? new Date().toISOString() : '';
+    keepHandoutList(list);
+    log(`Activation code for ${entry.name || entry.machine} ${entry.cancelled ? 'cancelled' : 'restored'}.`);
+    return handoutView();
+  });
+
+  handle('handout:pack', async ({ name, version, serial }) => {
+    const current = jobs.view().config;
+    const used = new Set([current.workflow, current.enter, current.again, current.rest].filter(Boolean));
+    if (!current.workflow) throw new Error('Choose the workflow that pays first (menu "รับงานจากเว็บ" ข้อ 3).');
+    const workflows = {};
+    const pickSets = {};
+    // Take every workflow the job uses, and every workflow and position set those lean on.
+    const take = (key) => {
+      const text = store.state.workflows[key];
+      if (!text) throw new Error(`The workflow "${key}" is not saved.`);
+      if (workflows[key]) return;
+      workflows[key] = text;
+      for (const step of logic.parseWorkflow(text)) {
+        const first = String(step.argument || '').split(/\s+/)[0];
+        if (step.command === 'pick' || step.command === 'pin') {
+          if (!store.state.pick_sets[first]) throw new Error(`The workflow "${key}" uses the position set "${first}", which is not saved.`);
+          pickSets[first] = store.state.pick_sets[first];
+        }
+        if (step.command === 'run' && !/\{\d\}/.test(first)) take(step.argument);
+      }
+    };
+    for (const key of used) take(key);
+    const device = serial && devices.get(serial);
+    const size = device && device.status === 'device' ? await requireAdb().screenSize(serial).catch(() => null) : null;
+    const profileFile = path.join(__dirname, 'closejob', 'profiles', 'closejob_v1.json');
+    const text = pack.build({
+      name, version, minApp: VERSION,
+      phone: { model: device ? device.model || '' : '', width: size ? size.width : 0, height: size ? size.height : 0 },
+      workflows, pickSets,
+      jobs: Object.fromEntries(pack.JOB_KEYS.map((key) => [key, current[key]])),
+      profile: fs.existsSync(profileFile) ? JSON.parse(fs.readFileSync(profileFile, 'utf8')) : null,
+    }, handoutKey());
+    // What was just built must open with the program's own public key.
+    const opened = pack.open(text, handoutPublicKey(), VERSION);
+    const result = await dialog.showSaveDialog(win, { title: 'Save the work pack', defaultPath: `${opened.name}-${opened.version}.onetwopack`, filters: [{ name: 'OneTwo ADB work pack', extensions: ['onetwopack'] }] });
+    if (result.canceled || !result.filePath) return { saved: '' };
+    fs.writeFileSync(result.filePath, text, 'utf8');
+    log(`Work pack ${opened.name} ${opened.version} saved: ${Object.keys(opened.workflows).length} workflow(s), ${Object.keys(opened.pickSets).length} position set(s).`);
+    return { saved: result.filePath, workflows: Object.keys(opened.workflows), pickSets: Object.keys(opened.pickSets), phone: opened.phone };
+  });
 
   handle('update:restart', () => {
     if (jobRunning) throw new Error(`Wait for "${jobRunning}" to finish first.`);

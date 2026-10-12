@@ -12,6 +12,7 @@ const CALLS = [
   'point:save', 'point:delete', 'pick:save', 'pick:edit', 'pick:rename', 'pick:delete', 'pick:scroll', 'pick:goto', 'touch:start', 'touch:stop', 'api:token',
   'jobs:set', 'jobs:open', 'jobs:pick', 'jobs:record', 'jobs:clear','jobs:read', 'jobs:run', 'jobs:auto', 'jobs:screen', 'jobs:orders', 'jobs:pay', 'jobs:payauto', 'jobs:unhalt', 'jobs:resolve',
   'folder:open', 'update:check', 'update:restart',
+  'handout:view', 'handout:issue', 'handout:cancel', 'handout:pack',
 ];
 const EVENTS = ['log', 'devices', 'thumb', 'job', 'status', 'update', 'timeline', 'touch', 'jobs'];
 

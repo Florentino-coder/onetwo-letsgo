@@ -2086,6 +2086,7 @@ const VIEWS = {
           number('แบตเตอรี่ต่ำกว่า (%)', 'low_battery_percent', { min: 1, max: 100 }),
           number('อุณหภูมิสูงกว่า (°C)', 'high_temp_c', { min: 25, max: 80, step: 0.5 }))),
       apiSettings(),
+      handoutSettings(),
       h('div', { class: 'section' },
         h('h3', null, 'เครื่องมือ'),
         h('div', { class: 'stack' },
@@ -2107,6 +2108,86 @@ const VIEWS = {
 function screenHas(text, value) {
   const digits = (input) => String(input).replace(/[,\- ]/g, '');
   return digits(text).includes(digits(value));
+}
+
+/** For the owner: activation codes and work packs for the program handed to other people. */
+function handoutSettings() {
+  if (!S.handout) {
+    call('handout:view').then((view) => { S.handout = view; if (S.view === 'settings') renderInspector(); }).catch(() => { S.handout = { canSign: false, licenses: [], version: S.version }; });
+    return null;
+  }
+  const handout = S.handout;
+  // Without the owner's private key nothing here can work, so nothing is shown.
+  if (!handout.canSign) return null;
+  const apply = async (request) => {
+    const next = await attempt(request);
+    if (next && next.licenses) S.handout = { ...S.handout, ...next };
+    renderInspector();
+    return next;
+  };
+  const copy = async (text) => {
+    await navigator.clipboard.writeText(text);
+    toast('คัดลอกรหัสเปิดใช้แล้ว', 'success');
+  };
+  const state = (entry) => {
+    if (entry.cancelled) return ['ยกเลิกแล้ว', 'error'];
+    if (entry.expires && new Date(`${entry.expires}T23:59:59`) < new Date()) return ['หมดอายุ', ''];
+    return [entry.expires ? `ถึง ${entry.expires}` : 'ไม่จำกัดวัน', 'online'];
+  };
+  const focused = S.devices.find((device) => device.serial === S.focus && device.online);
+  return h('div', { class: 'section' },
+    h('h3', null, 'ผู้ใช้งาน OneTwo ADB'),
+    h('p', { class: 'hint' }, 'ออกรหัสเปิดใช้ให้คอมของผู้ใช้งาน และส่งออกชุดงานที่ลงชื่อแล้ว ส่วนนี้ขึ้นเฉพาะบนคอมที่มีกุญแจของผู้พัฒนา'),
+    h('div', { class: 'stack' },
+      h('strong', null, 'ออกรหัสเปิดใช้'),
+      h('div', { class: 'form-grid' },
+        field('รหัสเครื่องของผู้ใช้งาน', h('input', { class: 'field mono', id: 'handout-machine', placeholder: 'XXXX-XXXX-XXXX', spellcheck: false })),
+        field('ชื่อผู้ใช้งาน', h('input', { class: 'field', id: 'handout-name', placeholder: 'ไว้จำว่ารหัสนี้ของใคร' })),
+        field('อายุ', h('select', { class: 'field', id: 'handout-age' },
+          h('option', { value: '30' }, '30 วัน'), h('option', { value: '90' }, '90 วัน'), h('option', { value: '365' }, '1 ปี'), h('option', { value: '' }, 'ไม่จำกัดวัน'))),
+        field('ต้องตรวจรายชื่อยกเลิกทุก (วัน)', h('input', { class: 'field', id: 'handout-offline', type: 'number', min: 0, value: 7, title: '0 = ไม่บังคับ ผู้ใช้งานที่ตัดอินเทอร์เน็ตจะไม่ถูกยกเลิก' }))),
+      h('div', { class: 'row wrap' },
+        h('button', {
+          class: 'btn primary',
+          onclick: async () => {
+            const days = $('handout-age').value;
+            const expires = days ? new Date(Date.now() + Number(days) * 86400000).toISOString().slice(0, 10) : '';
+            const made = await apply(() => call('handout:issue', { machine: $('handout-machine').value, name: $('handout-name').value, expires, offlineDays: $('handout-offline').value }));
+            if (made && made.code) await copy(made.code);
+          },
+        }, 'ออกรหัสและคัดลอก')),
+      handout.licenses.length > 0 && h('table', { class: 'table' },
+        h('thead', null, h('tr', null, h('th', null, 'ผู้ใช้งาน'), h('th', null, 'รหัสเครื่อง'), h('th', null, 'ออกเมื่อ'), h('th', null, 'สถานะ'), h('th', null, ''))),
+        h('tbody', null, handout.licenses.map((entry) => {
+          const [label, tone] = state(entry);
+          return h('tr', { class: entry.cancelled ? 'bad' : '' },
+            h('td', null, entry.name || '—'),
+            h('td', { class: 'mono' }, `${entry.machine.slice(0, 4)}-${entry.machine.slice(4, 8)}-${entry.machine.slice(8)}`),
+            h('td', { class: 'mono' }, entry.issued),
+            h('td', null, h('span', { class: `badge ${tone}` }, label)),
+            h('td', null, h('div', { class: 'row' },
+              h('button', { class: 'btn ghost', onclick: () => attempt(() => copy(entry.code)) }, 'คัดลอก'),
+              h('button', {
+                class: entry.cancelled ? 'btn' : 'btn danger',
+                onclick: async () => {
+                  if (!entry.cancelled && !(await confirmDialog('ยกเลิกรหัสนี้?', `${entry.name || entry.machine}\nโปรแกรมของผู้ใช้งานคนนี้จะหยุดจ่ายเมื่อตรวจอัปเดตครั้งถัดไป ต้องอัปโหลดโฟลเดอร์ updates ขึ้น GitHub ก่อน การยกเลิกจึงไปถึง`, 'ยกเลิกรหัส'))) return;
+                  apply(() => call('handout:cancel', { id: entry.id, cancelled: !entry.cancelled }));
+                },
+              }, entry.cancelled ? 'คืนสิทธิ์' : 'ยกเลิก'))));
+        }))),
+      h('strong', null, 'ส่งออกชุดงาน'),
+      h('p', { class: 'hint' }, `รวมเวิร์กโฟลว์ที่ตั้งไว้ในเมนู "รับงานจากเว็บ" ข้อ 3 ชุดตำแหน่งที่ใช้ และขั้นตอนปิดงาน ไม่มี PIN ลิงก์หลังบ้าน หรือเลขบัญชี${focused ? ` · รุ่นมือถือจาก ${focused.name || focused.model || focused.serial}` : ' · เลือกเครื่องที่ออนไลน์ 1 เครื่องเพื่อบันทึกรุ่นและขนาดจอ'}`),
+      h('div', { class: 'form-grid' },
+        field('ชื่อชุดงาน', h('input', { class: 'field', id: 'handout-pack-name', value: 'BBL' })),
+        field('เวอร์ชันชุดงาน', h('input', { class: 'field mono', id: 'handout-pack-version', value: '1.0.0', placeholder: '1.0.0' }))),
+      h('div', { class: 'row wrap' },
+        h('button', {
+          class: 'btn',
+          onclick: async () => {
+            const made = await attempt(() => call('handout:pack', { name: $('handout-pack-name').value, version: $('handout-pack-version').value, serial: focused ? focused.serial : '' }));
+            if (made && made.saved) toast(`บันทึกชุดงานแล้ว: ${made.workflows.length} เวิร์กโฟลว์ ${made.pickSets.length} ชุดตำแหน่ง`, 'success');
+          },
+        }, 'ส่งออกชุดงาน'))));
 }
 
 function apiSettings() {
