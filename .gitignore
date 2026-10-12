@@ -19,3 +19,4 @@ withdraw_audit.jsonl
 withdraw_ledger.json
 withdraw_ledger.json.tmp
 licenses.json
+user-data/

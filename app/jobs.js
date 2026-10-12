@@ -470,6 +470,8 @@ function cleanSteps(steps) {
  * @param {(serial: string, amount: string) => void} host.spend  take a paid amount off the phone's balance
  */
 function createJobs(host) {
+  // The user program runs from a pack, which brings the close-job steps for its own back office.
+  const profileFor = (url) => (host.closeProfile && host.closeProfile(url)) || closeProfileFor(url);
   let window = null;
   let auto = false;
   let timer = null;
@@ -507,7 +509,7 @@ function createJobs(host) {
       url: window ? window.webContents.getURL() : '',
       status,
       // The close-job profile for the back-office address, '' when there is none for it.
-      profile: (closeProfileFor(window ? window.webContents.getURL() : config().url) || { profile_id: '' }).profile_id,
+      profile: (profileFor(window ? window.webContents.getURL() : config().url) || { profile_id: '' }).profile_id,
       // Which recording is in progress and how many clicks it has, or null.
       recording: recording ? { which: recording.which, count: recording.steps.length } : null,
       orders: { ...ordersView(), error: orders.error || '' },
@@ -813,7 +815,7 @@ function createJobs(host) {
    * the status, the paying bank and the paying account on the site's form and save it.
    */
   async function closeByProfile(contents, current, proof, seen, key, rowKeys) {
-    const profile = closeProfileFor(contents.getURL());
+    const profile = profileFor(contents.getURL());
     if (!profile) throw new Error('The workflow ran, but there is no close-job profile for this back-office address. The job was left open.');
     if (!fs.existsSync(ENGINE_FILE)) throw new Error('The workflow ran, but the close-job engine file (app/closejob/engine.js) is missing. The job was left open.');
     const slip = logic.parseSlip(proof);
@@ -1058,7 +1060,7 @@ function createJobs(host) {
       if (ledgerWindow) closeAccounts();
       return;
     }
-    const profile = closeProfileFor(window.webContents.getURL());
+    const profile = profileFor(window.webContents.getURL());
     if (!profile || !profile.settlement_page_path) return;
     if (!force && (switching || at - lastAccounts < MIN_ACCOUNTS_MS)) return;
     lastAccounts = at;
@@ -1129,7 +1131,7 @@ function createJobs(host) {
    */
   async function switchAccount(account, on) {
     if (!account || !config().balances || !window) return false;
-    const profile = closeProfileFor(window.webContents.getURL());
+    const profile = profileFor(window.webContents.getURL());
     if (!profile || !profile.settlement_page_path) return false;
     if (switching) throw new Error('Another account is being switched in the back office. Try again in a moment.');
     switching = true;
@@ -1253,7 +1255,7 @@ function createJobs(host) {
     const contents = window.webContents;
     if (contents.isLoading()) return orders;
     const current = config();
-    const profile = closeProfileFor(contents.getURL());
+    const profile = profileFor(contents.getURL());
     let page = await contents.executeJavaScript(ORDERS_SCRIPT, true);
     let note = 'ok';
     const onTab = (text) => profile && (profile.withdraw_notify_tab_hints || []).some((hint) => String(text).toLowerCase().includes(String(hint).toLowerCase()));
@@ -1319,7 +1321,7 @@ function createJobs(host) {
     const text = host.store.state.workflows[current.workflow];
     if (!text) throw new Error('Choose a saved workflow for paying first.');
     if (host.busy()) throw new Error(`Wait for "${host.busy()}" to finish first.`);
-    if (!closeProfileFor(contents.getURL())) throw new Error('There is no close-job profile for this back-office address.');
+    if (!profileFor(contents.getURL())) throw new Error('There is no close-job profile for this back-office address.');
     const listed = orders.list.find((each) => each.key === key);
     if (!listed) throw new Error('That withdrawal is no longer on the page.');
     if (ledger[key] || [...paying.values()].some((each) => each.key === key)) throw new Error('That withdrawal was already begun by this app, so it is not begun again.');

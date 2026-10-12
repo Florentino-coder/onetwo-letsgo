@@ -104,3 +104,75 @@ test('a pack that could not run is not built', () => {
   assert.throws(broken((made) => { made.version = 'new'; }), /version is written like/);
   assert.throws(broken((made) => { made.workflows.pay = 'run missing\ntext {1}'; }), /runs "missing"/);
 });
+
+// ── the user program's pack store, and which program this is ──
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { createPackStore } = require('../app/packstore.js');
+const { editionOf } = require('../app/edition.js');
+
+const packOf = (version, key = owner.privateKey) => pack.build({
+  name: 'BBL', version, minApp: '0.1.0',
+  workflows: { pay: 'tap 50% 50%\nwait 500\n' },
+  jobs: { workflow: 'pay' },
+}, key);
+
+function tempStore(bundledText) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'onetwo-packs-'));
+  const bundled = path.join(dir, 'default.onetwopack');
+  if (bundledText) fs.writeFileSync(bundled, bundledText, 'utf8');
+  return { dir, store: createPackStore({ dir: path.join(dir, 'packs'), bundled, publicKey: owner.publicKey, appVersion: '1.0.0' }) };
+}
+
+test('the pack store runs from the pack that came with the program until one is installed', () => {
+  const { store } = tempStore(packOf('1.0.0'));
+  assert.equal(store.current().version, '1.0.0');
+  assert.equal(store.previous(), null);
+  assert.equal(store.install(packOf('1.1.0')).version, '1.1.0');
+  assert.equal(store.current().version, '1.1.0');
+  assert.equal(store.previous().version, '1.0.0');
+  assert.equal(tempStore('').store.current(), null);
+});
+
+test('the pack store refuses a pack that is not the owner\'s, and one changed on disk is not run', () => {
+  const { dir, store } = tempStore(packOf('1.0.0'));
+  assert.throws(() => store.install(packOf('9.9.9', other.privateKey)), /not signed by the owner/);
+  assert.equal(store.current().version, '1.0.0');
+  store.install(packOf('1.1.0'));
+  // Someone edits the installed file: the store falls back to the pack that came with the program.
+  const file = path.join(dir, 'packs', 'current.onetwopack');
+  const kept = JSON.parse(fs.readFileSync(file, 'utf8'));
+  fs.writeFileSync(file, JSON.stringify({ ...kept, pack: JSON.parse(packOf('7.0.0', other.privateKey)).pack }), 'utf8');
+  assert.equal(store.current().version, '1.0.0');
+});
+
+test('a pack taken back is not put straight back by the update channel', () => {
+  const { store } = tempStore(packOf('1.0.0'));
+  const offer = (version, only) => ({ version, file: `pack-${version}.onetwopack`, ...(only ? { only } : {}) });
+  assert.equal(store.wants(offer('1.1.0'), 'aaa'), true);
+  assert.equal(store.wants(offer('1.0.0'), 'aaa'), false);
+  // A release to named codes only is for nobody else.
+  assert.equal(store.wants(offer('1.1.0', ['bbb']), 'aaa'), false);
+  assert.equal(store.wants(offer('1.1.0', ['bbb']), 'bbb'), true);
+  assert.equal(store.wants({ version: '1.1.0', file: '../evil' }, 'aaa'), false);
+  store.install(packOf('1.1.0'));
+  assert.equal(store.rollback().version, '1.0.0');
+  assert.equal(store.current().version, '1.0.0');
+  assert.equal(store.wants(offer('1.1.0'), 'aaa'), false);
+  assert.equal(store.wants(offer('1.2.0'), 'aaa'), true);
+  // Rolling back again goes forward to the one that was left.
+  assert.equal(store.rollback().version, '1.1.0');
+  // Installing by hand forgets what was taken back.
+  store.install(packOf('1.3.0'));
+  assert.equal(store.wants(offer('1.4.0'), 'aaa'), true);
+  assert.throws(() => tempStore('').store.rollback(), /No earlier pack/);
+});
+
+test('the program is the studio unless it is built or started as the user program', () => {
+  assert.equal(editionOf({ edition: 'user' }, {}), 'user');
+  assert.equal(editionOf({}, {}), 'studio');
+  assert.equal(editionOf(null, { ONETWO_EDITION: 'USER' }), 'user');
+  assert.equal(editionOf({ edition: 'anything' }, {}), 'studio');
+});

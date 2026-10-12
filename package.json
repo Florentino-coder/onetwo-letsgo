@@ -7,6 +7,7 @@
   "main": "app/boot.js",
   "scripts": {
     "start": "electron .",
+    "start:user": "set ONETWO_EDITION=user&& electron .",
     "test": "node --test",
     "icons": "electron tools/make-icons.js",
     "release": "node tools/release.js"
@@ -14,5 +15,6 @@
   "devDependencies": {
     "electron": "^44.5.1"
   },
-  "updateUrl": "https://raw.githubusercontent.com/Florentino-coder/onetwo-letsgo/main/updates/"
+  "updateUrl": "https://raw.githubusercontent.com/Florentino-coder/onetwo-letsgo/main/updates/",
+  "userUpdateUrl": ""
 }

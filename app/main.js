@@ -11,14 +11,19 @@ const path = require('node:path');
 const { AdbClient } = require('./core/adb');
 const { Store } = require('./core/store');
 const logic = require('./core/logic');
-const { checkForUpdate } = require('./updater');
+const { checkForUpdate, validBaseUrl } = require('./updater');
 const { createJobs } = require('./jobs');
 const license = require('./license.js');
 const pack = require('./pack.js');
+const { createPackStore } = require('./packstore.js');
+const { edition, DEVELOPER, NAMES } = require('./edition.js');
 const ocr = require('./ocr');
 const secret = require('./secret');
 
-const APP_NAME = 'ADB-OneTwo';
+// 'studio' is the owner's program. 'user' is the one handed to other people: it only pays.
+const EDITION = edition();
+const USER = EDITION === 'user';
+const APP_NAME = NAMES[EDITION];
 const DEVICE_PARALLELISM = 4;
 const THUMBNAIL_WIDTH = 300;
 const RECORD_WIDTH = 540;
@@ -41,6 +46,82 @@ const VERSION = process.env.FARM_VERSION || app.getVersion();
 const baseDir = process.env.FARM_DATA_DIR
   || (app.isPackaged ? app.getPath('userData') : path.join(__dirname, '..'));
 const store = new Store(baseDir);
+// A development run may name another key file, so tests sign with a key made for the test.
+const ownerKey = () => fs.readFileSync((!app.isPackaged && process.env.ONETWO_OWNER_KEY) || path.join(__dirname, 'update-public.pem'), 'utf8');
+
+// ── the user program: work pack and activation ──────────────────────────
+// The user program has no workflows of its own. It runs from a signed pack, and the settings a
+// pack does not bring are fixed here: jobs are closed for real, by the back office's own form.
+const USER_JOB_FIXED = { closeBy: 'profile', closeDry: false, verify: true, source: 'gallery', watch: true, balances: true };
+const packs = USER ? createPackStore({ dir: path.join(baseDir, 'packs'), bundled: path.join(__dirname, 'packs', 'default.onetwopack'), publicKey: ownerKey(), appVersion: VERSION }) : null;
+let packInUse = null;
+
+/** Put the pack in use into the places the rest of the program reads workflows and settings from. */
+function applyPack() {
+  packInUse = packs.current();
+  store.state.workflows = packInUse ? { ...packInUse.workflows } : {};
+  store.state.pick_sets = packInUse ? { ...packInUse.pickSets } : {};
+  const kept = store.config.jobs && typeof store.config.jobs === 'object' ? store.config.jobs : {};
+  store.config.jobs = { ...kept, workflow: '', enter: '', again: '', rest: '', ...(packInUse ? packInUse.jobs : {}), ...USER_JOB_FIXED };
+}
+if (USER) {
+  applyPack();
+  // Nobody sets scanning up in the user program: phones are looked for all the time.
+  store.config.auto_scan_enabled = true;
+}
+
+/** The pack's close-job steps, for a page of the user's own back office; null for any other page. */
+function packCloseProfile(url) {
+  if (!USER || !packInUse || !packInUse.profile) return null;
+  try {
+    return new URL(url).origin === new URL(String((store.config.jobs || {}).url)).origin ? packInUse.profile : null;
+  } catch {
+    return null;
+  }
+}
+
+const licenseFile = path.join(baseDir, 'license.txt');
+const cancelledFile = path.join(baseDir, 'cancelled.json');
+let machineCodeKept = '';
+
+function thisMachine() {
+  // A test may name the computer, so a code can be made for it beforehand.
+  if (!machineCodeKept) machineCodeKept = process.env.ONETWO_MACHINE && !app.isPackaged ? process.env.ONETWO_MACHINE : license.machineCode();
+  return machineCodeKept;
+}
+
+function cancelledList() {
+  try {
+    return license.readCancelled(fs.readFileSync(cancelledFile, 'utf8'), ownerKey());
+  } catch {
+    return { ids: [], at: '' };
+  }
+}
+
+/** Whether this copy may pay: { ok, reason, name, expires, daysLeft, id, machine }. The studio always may. */
+function licenseState() {
+  if (!USER) return { ok: true, reason: '', name: '', expires: null, daysLeft: null, id: '', machine: '' };
+  let machine = '';
+  try {
+    machine = thisMachine();
+  } catch {
+    // Without the computer's id no code can be matched; the reason below says so.
+  }
+  let code = '';
+  try {
+    code = fs.readFileSync(licenseFile, 'utf8');
+  } catch {
+    // Not activated yet.
+  }
+  const result = license.check(code, ownerKey(), { machine, cancelled: cancelledList().ids, lastChecked: store.config.license_checked || null });
+  const note = result.note || {};
+  return { ok: result.ok, reason: result.reason, name: note.name || '', expires: note.expires || null, daysLeft: result.daysLeft, id: note.id || '', machine };
+}
+
+function userView() {
+  return { license: licenseState(), pack: packs.view(), developer: DEVELOPER, setupDone: Boolean(store.config.user_setup_done) };
+}
+
 // Sets saved by an older version lack fields added since; give every set its full shape once.
 for (const name of Object.keys(store.state.pick_sets)) store.state.pick_sets[name] = logic.normalizePickSet(store.state.pick_sets[name]);
 
@@ -65,6 +146,7 @@ const jobs = createJobs({
   },
   runWorkflow: (request) => runWorkflow(request),
   runWorkflowOne: (request) => runWorkflowOne(request),
+  closeProfile: (url) => packCloseProfile(url),
   onlineSerials: () => [...devices.values()].filter((device) => device.status === 'device').map((device) => device.serial),
   busy: () => jobRunning,
   inputsOf: (text) => logic.workflowInputs(logic.parseWorkflow(text)),
@@ -831,7 +913,9 @@ function updateView() {
 
 function updateUrl() {
   try {
-    return String(require(path.join(app.getAppPath(), 'package.json')).updateUrl || '');
+    // The user program reads its own channel: what the owner released to other people.
+    const pkg = require(path.join(app.getAppPath(), 'package.json'));
+    return String((USER ? pkg.userUpdateUrl : pkg.updateUrl) || '');
   } catch {
     return '';
   }
@@ -845,9 +929,10 @@ async function runUpdateCheck() {
     const result = await checkForUpdate({
       baseUrl: updateUrl(),
       currentVersion: VERSION,
-      publicKey: fs.readFileSync(path.join(__dirname, 'update-public.pem'), 'utf8'),
+      publicKey: ownerKey(),
       updatesDir: path.join(baseDir, 'installed-updates'),
     });
+    if (USER) await syncChannel();
     updateState = result;
     // Only a completed check counts, so an offline machine tries again at the next poll.
     if (result.status === 'current' || result.status === 'updated') {
@@ -867,6 +952,59 @@ async function runUpdateCheck() {
   } finally {
     updateChecking = false;
   }
+}
+
+const CHANNEL_MAX_BYTES = 2 * 1024 * 1024;
+
+async function channelText(name) {
+  const response = await fetch(new URL(name, updateUrl()), { cache: 'no-store', signal: AbortSignal.timeout(30000) });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const body = Buffer.from(await response.arrayBuffer());
+  if (body.length > CHANNEL_MAX_BYTES) throw new Error('The file is too large.');
+  return body.toString('utf8');
+}
+
+/**
+ * The user program's other two things on the owner's channel: the list of cancelled activation
+ * codes, and a newer work pack. Each is signed by the owner and checked before it is kept.
+ */
+async function syncChannel() {
+  if (!validBaseUrl(updateUrl())) return;
+  try {
+    const text = await channelText('cancelled.json');
+    const list = license.readCancelled(text, ownerKey());
+    // An older list put back in place of a newer one must not bring a cancelled code back.
+    if (!cancelledList().at || list.at >= cancelledList().at) fs.writeFileSync(cancelledFile, text, 'utf8');
+    store.config.license_checked = new Date().toISOString();
+    store.saveConfig();
+  } catch (error) {
+    log(`The list of cancelled codes was not read: ${error.message}`, 'warning');
+  }
+  try {
+    const offer = JSON.parse(await channelText('pack-latest.json'));
+    if (packs.wants(offer, licenseState().id)) {
+      // A phone in the middle of a job keeps the steps it started with; the pack waits for the next check.
+      if (Object.keys(jobs.view().paying).length) return;
+      const content = packs.install(await channelText(offer.file));
+      applyPack();
+      log(`Work pack ${content.name} ${content.version} installed.`);
+      if (Notification.isSupported()) new Notification({ title: APP_NAME, body: `ชุดงาน ${content.name} ${content.version} พร้อมใช้แล้ว` }).show();
+      send('state', publicState());
+    }
+  } catch (error) {
+    // No pack on the channel is the usual case.
+    if (!/HTTP 404/.test(error.message)) log(`The work pack on the channel was not installed: ${error.message}`, 'warning');
+  }
+  enforceLicense();
+}
+
+/** A copy whose code stopped being good pays nothing more by itself. */
+function enforceLicense() {
+  if (!USER || licenseState().ok || !jobs.view().payAuto) return;
+  jobs.setPayAuto(false);
+  log('Automatic mode was switched off: the activation code is no longer good.', 'error');
+  if (Notification.isSupported()) new Notification({ title: APP_NAME, body: 'รหัสเปิดใช้ใช้ไม่ได้แล้ว หยุดจ่ายอัตโนมัติ' }).show();
+  send('state', publicState());
 }
 
 /** Runs a check when 24 hours have passed since the last completed one. */
@@ -896,6 +1034,8 @@ const CONFIG_KEYS = {
 function publicState() {
   return {
     version: VERSION,
+    edition: EDITION,
+    user: USER ? userView() : null,
     update: updateView(),
     // Run each value through its normalizer so a missing key shows its default in Settings.
     config: Object.fromEntries(Object.entries(CONFIG_KEYS).map(([key, normalize]) => [key, normalize(store.config[key])])),
@@ -914,9 +1054,26 @@ function publicState() {
   };
 }
 
+// What the user program's window may ask for. Everything else belongs to the studio.
+const USER_CALLS = new Set([
+  'state:get', 'devices:scan', 'adb:restart', 'device:meta', 'device:pin', 'device:range', 'device:pay', 'device:account',
+  'jobs:set', 'jobs:open', 'jobs:orders', 'jobs:pay', 'jobs:payauto', 'jobs:unhalt', 'jobs:resolve',
+  'folder:open', 'update:check', 'update:restart',
+  'license:set', 'pack:import', 'pack:rollback', 'user:setup', 'user:signed',
+]);
+// And of those, what it may ask for before it is activated.
+const UNLICENSED_CALLS = new Set(['state:get', 'license:set', 'update:check', 'update:restart', 'folder:open']);
+// The settings of a job the user program's window may change; the rest come from the pack.
+const USER_JOB_KEYS = ['url', 'filter'];
+
 function handle(channel, handler) {
   ipcMain.handle(channel, async (_event, payload) => {
     try {
+      if (USER) {
+        if (!USER_CALLS.has(channel)) throw new Error('This program does not do that.');
+        if (!UNLICENSED_CALLS.has(channel) && !licenseState().ok) throw new Error('This program is not activated.');
+        if (channel === 'jobs:set') payload = Object.fromEntries(USER_JOB_KEYS.filter((key) => payload && key in payload).map((key) => [key, payload[key]]));
+      }
       return { ok: true, data: await handler(payload || {}) };
     } catch (error) {
       return { ok: false, error: error.message };
@@ -1380,7 +1537,11 @@ function registerIpc() {
   handle('jobs:screen', () => jobs.screen());
   handle('jobs:orders', () => jobs.refreshOrders());
   handle('jobs:pay', ({ key }) => jobs.pay(String(key || '')));
-  handle('jobs:payauto', ({ on }) => jobs.setPayAuto(Boolean(on)));
+  handle('jobs:payauto', ({ on }) => {
+    // The user program pays by itself only after one row was paid and closed by hand on this computer.
+    if (USER && on && !jobs.view().history.some((entry) => entry.state === 'done')) throw new Error('Pay one row by hand first.');
+    return jobs.setPayAuto(Boolean(on));
+  });
   handle('jobs:unhalt', (request) => jobs.unhalt(request && request.serial ? String(request.serial) : ''));
   handle('jobs:resolve', ({ key, note }) => jobs.resolve(String(key || ''), note));
 
@@ -1390,7 +1551,7 @@ function registerIpc() {
   // Only the owner's computer holds the private key; without it these do nothing.
   const handoutKeyFile = path.join(baseDir, 'update-private.pem');
   const handoutListFile = path.join(baseDir, 'licenses.json');
-  const handoutPublicKey = () => fs.readFileSync(path.join(__dirname, 'update-public.pem'), 'utf8');
+  const handoutPublicKey = () => ownerKey();
   const handoutKey = () => {
     if (!fs.existsSync(handoutKeyFile)) throw new Error('The owner\'s private key (update-private.pem) is not on this computer, so nothing can be signed here.');
     return fs.readFileSync(handoutKeyFile, 'utf8');
@@ -1435,7 +1596,8 @@ function registerIpc() {
     return handoutView();
   });
 
-  handle('handout:pack', async ({ name, version, serial }) => {
+  /** Build a signed pack from what the job uses now. Resolves with its file text and its checked content. */
+  const buildPack = async ({ name, version, serial }) => {
     const current = jobs.view().config;
     const used = new Set([current.workflow, current.enter, current.again, current.rest].filter(Boolean));
     if (!current.workflow) throw new Error('Choose the workflow that pays first (menu "รับงานจากเว็บ" ข้อ 3).');
@@ -1468,13 +1630,79 @@ function registerIpc() {
       profile: fs.existsSync(profileFile) ? JSON.parse(fs.readFileSync(profileFile, 'utf8')) : null,
     }, handoutKey());
     // What was just built must open with the program's own public key.
-    const opened = pack.open(text, handoutPublicKey(), VERSION);
+    return { text, opened: pack.open(text, handoutPublicKey(), VERSION) };
+  };
+
+  handle('handout:pack', async (request) => {
+    const { text, opened } = await buildPack(request);
     const result = await dialog.showSaveDialog(win, { title: 'Save the work pack', defaultPath: `${opened.name}-${opened.version}.onetwopack`, filters: [{ name: 'OneTwo ADB work pack', extensions: ['onetwopack'] }] });
     if (result.canceled || !result.filePath) return { saved: '' };
     fs.writeFileSync(result.filePath, text, 'utf8');
     log(`Work pack ${opened.name} ${opened.version} saved: ${Object.keys(opened.workflows).length} workflow(s), ${Object.keys(opened.pickSets).length} position set(s).`);
     return { saved: result.filePath, workflows: Object.keys(opened.workflows), pickSets: Object.keys(opened.pickSets), phone: opened.phone };
   });
+
+  // Put a pack on the update channel, for every user program or for the named activation codes
+  // only. The programs take it at their next check; `updates/` still has to be published.
+  handle('handout:release', async ({ name, version, serial, only }) => {
+    const { text, opened } = await buildPack({ name, version, serial });
+    const ids = (Array.isArray(only) ? only : String(only || '').split(/[\s,]+/)).map((id) => String(id).trim()).filter(Boolean);
+    const known = new Set(handoutList().map((each) => each.id));
+    const unknown = ids.find((id) => !known.has(id));
+    if (unknown) throw new Error(`There is no activation code with the id "${unknown}".`);
+    const dir = path.join(baseDir, 'updates');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = `pack-${opened.version}.onetwopack`;
+    for (const old of fs.readdirSync(dir)) if (/^pack-.*\.onetwopack$/.test(old)) fs.rmSync(path.join(dir, old));
+    fs.writeFileSync(path.join(dir, file), text, 'utf8');
+    fs.writeFileSync(path.join(dir, 'pack-latest.json'), JSON.stringify({ name: opened.name, version: opened.version, file, ...(ids.length ? { only: ids } : {}) }), 'utf8');
+    log(`Work pack ${opened.name} ${opened.version} put on the update channel${ids.length ? ` for ${ids.length} code(s)` : ' for everyone'}.`);
+    return { file, version: opened.version, only: ids };
+  });
+
+  // ── the user program's own requests ──
+  handle('license:set', ({ code }) => {
+    const text = String(code || '').trim();
+    const result = license.check(text, ownerKey(), { machine: thisMachine(), cancelled: cancelledList().ids, lastChecked: new Date().toISOString() });
+    const why = { missing: 'Paste the activation code.', forged: 'That is not an activation code from the owner.', machine: 'That code is for another computer.', expired: 'That code has expired.', cancelled: 'That code was cancelled.', offline: 'That code needs a check with the owner\'s channel first.' };
+    if (!result.ok) throw new Error(why[result.reason] || 'That code cannot be used.');
+    fs.writeFileSync(licenseFile, text, 'utf8');
+    // A fresh code starts its offline days from now.
+    store.config.license_checked = new Date().toISOString();
+    store.saveConfig();
+    log(`Activated for ${result.note.name || 'this computer'}.`);
+    return publicState();
+  });
+
+  const packIdle = () => {
+    if (Object.keys(jobs.view().paying).length || jobs.view().payAuto) throw new Error('Switch automatic mode off and wait for the phones to finish first.');
+  };
+
+  handle('pack:import', async () => {
+    packIdle();
+    const result = await dialog.showOpenDialog(win, { title: 'Choose a work pack', properties: ['openFile'], filters: [{ name: 'OneTwo ADB work pack', extensions: ['onetwopack'] }] });
+    if (result.canceled || !result.filePaths[0]) return publicState();
+    const content = packs.install(fs.readFileSync(result.filePaths[0], 'utf8'));
+    applyPack();
+    log(`Work pack ${content.name} ${content.version} installed from a file.`);
+    return publicState();
+  });
+
+  handle('pack:rollback', () => {
+    packIdle();
+    const content = packs.rollback();
+    applyPack();
+    log(`Back to work pack ${content.name} ${content.version}.`);
+    return publicState();
+  });
+
+  handle('user:setup', ({ done }) => {
+    store.config.user_setup_done = Boolean(done);
+    store.saveConfig();
+    return publicState();
+  });
+
+  handle('user:signed', async () => ({ signedIn: await jobs.signedIn() }));
 
   handle('update:restart', () => {
     if (jobRunning) throw new Error(`Wait for "${jobRunning}" to finish first.`);
@@ -1494,7 +1722,7 @@ function registerIpc() {
 
 function ensureDefaults() {
   let changed = false;
-  if (!Object.keys(store.state.workflows).length) {
+  if (!USER && !Object.keys(store.state.workflows).length) {
     store.state.workflows['Wake Home'] = 'wake\nwait 500\nhome\n';
     store.state.workflows['Settings Screenshot'] = 'open com.android.settings\nwait 1000\nscreenshot\n';
     store.saveState();
@@ -1507,14 +1735,14 @@ function ensureDefaults() {
 }
 
 function createWindow() {
-  const dark = store.config.theme !== 'light';
+  const dark = USER || store.config.theme !== 'light';
   win = new BrowserWindow({
-    width: 1480,
-    height: 920,
-    minWidth: 1120,
-    minHeight: 700,
+    width: USER ? 1180 : 1480,
+    height: USER ? 780 : 920,
+    minWidth: USER ? 1000 : 1120,
+    minHeight: USER ? 660 : 700,
     title: APP_NAME,
-    backgroundColor: dark ? '#0a0d16' : '#f3f4f8',
+    backgroundColor: USER ? '#0c0f15' : dark ? '#0a0d16' : '#f3f4f8',
     autoHideMenuBar: true,
     icon: path.join(__dirname, 'assets', 'icon.png'),
     webPreferences: {
@@ -1531,7 +1759,8 @@ function createWindow() {
   win.webContents.on('will-navigate', (event) => event.preventDefault());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   // The theme rides in the query so the first paint already has the right colors.
-  win.loadFile(path.join(__dirname, 'ui', 'index.html'), { query: { theme: dark ? 'dark' : 'light' } });
+  if (USER) win.loadFile(path.join(__dirname, 'user', 'index.html'));
+  else win.loadFile(path.join(__dirname, 'ui', 'index.html'), { query: { theme: dark ? 'dark' : 'light' } });
   win.webContents.once('did-finish-load', () => {
     if (adb) scan();
     else log('ADB was not found. Set its location in Settings.', 'error');
@@ -1551,7 +1780,9 @@ if (!app.requestSingleInstanceLock()) {
     ensureDefaults();
     loadTools();
     registerIpc();
-    startApi();
+    // The web API runs saved workflows for another system; the user program has none of its own.
+    if (!USER) startApi();
+    else setInterval(enforceLicense, 10 * 60000);
     createWindow();
     checkUpdateIfDue();
     setInterval(checkUpdateIfDue, UPDATE_POLL_MS);

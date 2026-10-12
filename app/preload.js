@@ -12,9 +12,10 @@ const CALLS = [
   'point:save', 'point:delete', 'pick:save', 'pick:edit', 'pick:rename', 'pick:delete', 'pick:scroll', 'pick:goto', 'touch:start', 'touch:stop', 'api:token',
   'jobs:set', 'jobs:open', 'jobs:pick', 'jobs:record', 'jobs:clear','jobs:read', 'jobs:run', 'jobs:auto', 'jobs:screen', 'jobs:orders', 'jobs:pay', 'jobs:payauto', 'jobs:unhalt', 'jobs:resolve',
   'folder:open', 'update:check', 'update:restart',
-  'handout:view', 'handout:issue', 'handout:cancel', 'handout:pack',
+  'handout:view', 'handout:issue', 'handout:cancel', 'handout:pack', 'handout:release',
+  'license:set', 'pack:import', 'pack:rollback', 'user:setup', 'user:signed',
 ];
-const EVENTS = ['log', 'devices', 'thumb', 'job', 'status', 'update', 'timeline', 'touch', 'jobs'];
+const EVENTS = ['log', 'devices', 'thumb', 'job', 'status', 'update', 'timeline', 'touch', 'jobs', 'state'];
 
 contextBridge.exposeInMainWorld('farm', {
   call(channel, payload) {

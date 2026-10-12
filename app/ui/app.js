@@ -2179,7 +2179,10 @@ function handoutSettings() {
       h('p', { class: 'hint' }, `รวมเวิร์กโฟลว์ที่ตั้งไว้ในเมนู "รับงานจากเว็บ" ข้อ 3 ชุดตำแหน่งที่ใช้ และขั้นตอนปิดงาน ไม่มี PIN ลิงก์หลังบ้าน หรือเลขบัญชี${focused ? ` · รุ่นมือถือจาก ${focused.name || focused.model || focused.serial}` : ' · เลือกเครื่องที่ออนไลน์ 1 เครื่องเพื่อบันทึกรุ่นและขนาดจอ'}`),
       h('div', { class: 'form-grid' },
         field('ชื่อชุดงาน', h('input', { class: 'field', id: 'handout-pack-name', value: 'BBL' })),
-        field('เวอร์ชันชุดงาน', h('input', { class: 'field mono', id: 'handout-pack-version', value: '1.0.0', placeholder: '1.0.0' }))),
+        field('เวอร์ชันชุดงาน', h('input', { class: 'field mono', id: 'handout-pack-version', value: '1.0.0', placeholder: '1.0.0' })),
+        field('ปล่อยให้ใคร (เมื่อกด "ปล่อยขึ้นช่องอัปเดต")', h('select', { class: 'field', id: 'handout-pack-only' },
+          h('option', { value: '' }, 'ผู้ใช้งานทุกคน'),
+          S.handout.licenses.filter((entry) => !entry.cancelled).map((entry) => h('option', { value: entry.id }, `เฉพาะ ${entry.name || entry.machine} (ลองกับคนเดียวก่อน)`))))),
       h('div', { class: 'row wrap' },
         h('button', {
           class: 'btn',
@@ -2187,7 +2190,18 @@ function handoutSettings() {
             const made = await attempt(() => call('handout:pack', { name: $('handout-pack-name').value, version: $('handout-pack-version').value, serial: focused ? focused.serial : '' }));
             if (made && made.saved) toast(`บันทึกชุดงานแล้ว: ${made.workflows.length} เวิร์กโฟลว์ ${made.pickSets.length} ชุดตำแหน่ง`, 'success');
           },
-        }, 'ส่งออกชุดงาน'))));
+        }, 'ส่งออกชุดงาน'),
+        h('button', {
+          class: 'btn',
+          onclick: async () => {
+            const only = $('handout-pack-only').value;
+            const version = $('handout-pack-version').value;
+            if (!(await confirmDialog('ปล่อยชุดงานขึ้นช่องอัปเดต?', `ชุดงาน ${$('handout-pack-name').value} ${version} · ${only ? 'เฉพาะผู้ใช้งานที่เลือก' : 'ผู้ใช้งานทุกคน'}
+โปรแกรมของผู้ใช้งานจะรับไปเมื่อตรวจอัปเดตครั้งถัดไป ต้องอัปโหลดโฟลเดอร์ updates ขึ้น GitHub ก่อน ชุดงานจึงไปถึง`, 'ปล่อย'))) return;
+            const made = await attempt(() => call('handout:release', { name: $('handout-pack-name').value, version, serial: focused ? focused.serial : '', only: only ? [only] : [] }));
+            if (made) toast(`วางชุดงาน ${made.version} ในโฟลเดอร์ updates แล้ว (${made.file})`, 'success');
+          },
+        }, 'ปล่อยขึ้นช่องอัปเดต'))));
 }
 
 function apiSettings() {
