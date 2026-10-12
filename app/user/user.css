@@ -150,6 +150,10 @@ textarea.inp { resize: none; height: 96px; word-break: break-all; font-family: v
 body { font-variant-numeric: tabular-nums; }
 select.inp { appearance: none; }
 .code { font-family: var(--code); font-size: 24px; letter-spacing: .08em; color: var(--gold); user-select: text; }
+.peek { position: relative; }
+.peek .inp { padding-right: 44px; }
+.eye { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 32px; height: 32px; display: grid; place-items: center; background: none; border: 0; border-radius: 6px; color: var(--muted); cursor: pointer; padding: 0; }
+.eye:hover { color: var(--gold); }
 .okline { color: var(--good); font-size: 13px; }
 .badline { color: var(--bad); font-size: 13px; }
 .acts { display: flex; gap: 10px; align-items: center; }

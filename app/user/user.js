@@ -471,6 +471,34 @@ function settings() {
   ]);
 }
 
+const EYE_OPEN = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_SHUT = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.8 10.8 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.1M6.5 6.6C3.7 8.4 2 12 2 12s3.6 7 10 7c1.7 0 3.2-.5 4.5-1.2"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
+
+/**
+ * The eye beside a secret field: shows what is typed, and hides it again. With `serial`, an
+ * empty field is first filled with the PIN kept for that phone, so it can be checked.
+ */
+function eyeButton(fieldId, serial) {
+  const button = h('button', { class: 'eye', type: 'button', title: 'แสดงหรือซ่อน PIN', 'aria-label': 'แสดงหรือซ่อน PIN' });
+  button.innerHTML = EYE_OPEN;
+  button.addEventListener('click', async () => {
+    const box = $(fieldId);
+    if (box.type === 'password') {
+      if (!box.value && serial) {
+        const kept = await ask('device:pin-show', { serial });
+        if (kept === null) return;
+        box.value = kept;
+      }
+      box.type = 'text';
+      button.innerHTML = EYE_SHUT;
+    } else {
+      box.type = 'password';
+      button.innerHTML = EYE_OPEN;
+    }
+  });
+  return button;
+}
+
 // ── a phone's details ────────────────────────────────────────────────────
 
 function openPhone(serial) {
@@ -508,7 +536,9 @@ function openPhone(serial) {
       h('div', { class: 'hint' }, `${device.model || ''} · ${device.serial} · ${device.online ? 'ต่ออยู่' : 'ออฟไลน์'}${view.spent ? ` · จ่ายวันนี้ ${money(view.spent)}` : ''}`),
       h('div', { class: 'grid' },
         field('ชื่อเครื่อง', h('input', { class: 'inp plain', id: 'phone-name', value: device.name, placeholder: device.model || '' })),
-        field(device.hasPin ? 'PIN แอปธนาคาร (ตั้งแล้ว ใส่เมื่อจะเปลี่ยน)' : 'PIN แอปธนาคาร', h('input', { class: 'inp', id: 'phone-pin', type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: device.hasPin ? '••••••' : '' })),
+        field(device.hasPin ? 'PIN แอปธนาคาร (ตั้งแล้ว ใส่เมื่อจะเปลี่ยน)' : 'PIN แอปธนาคาร', h('div', { class: 'peek' },
+          h('input', { class: 'inp', id: 'phone-pin', type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: device.hasPin ? '••••••' : '' }),
+          eyeButton('phone-pin', device.hasPin ? serial : ''))),
         field(`เลขบัญชี ${BANK} ของเครื่อง`, h('input', { class: 'inp', id: 'phone-account', value: device.pay.account, inputmode: 'numeric' })),
         field('ชื่อบัญชี', h('input', { class: 'inp plain', id: 'phone-holder', value: device.pay.holder })),
         field('ยอดต่ำสุดที่เครื่องนี้จ่าย', h('input', { class: 'inp', id: 'phone-min', type: 'number', min: 1, value: device.amountMin ?? '' })),

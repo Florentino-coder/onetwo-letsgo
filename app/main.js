@@ -1160,7 +1160,7 @@ function publicState() {
 
 // What the user program's window may ask for. Everything else belongs to the studio.
 const USER_CALLS = new Set([
-  'state:get', 'devices:scan', 'adb:restart', 'device:meta', 'device:pin', 'device:range', 'device:pay', 'device:account',
+  'state:get', 'devices:scan', 'adb:restart', 'device:meta', 'device:pin', 'device:pin-show', 'device:range', 'device:pay', 'device:account',
   'jobs:set', 'jobs:open', 'jobs:orders', 'jobs:pay', 'jobs:payauto', 'jobs:unhalt', 'jobs:resolve',
   'folder:open', 'update:check', 'update:restart',
   'license:set', 'pack:import', 'pack:rollback', 'user:setup', 'user:signed',
