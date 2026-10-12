@@ -1008,6 +1008,19 @@ function createJobs(host) {
     if (host.notify) host.notify(`${serial}: หยุดทำงาน ตรวจรายการก่อนรีเซ็ต`);
   }
 
+  // The bank starts every account's daily limit again at midnight, and so does a phone's daily cap
+  // here: only rows of today count (see spentToday). This turn of the clock just says so and
+  // draws the window again, so a phone at its cap is seen to be free without waiting for a job.
+  let dayNow = new Date().toDateString();
+  setInterval(() => {
+    const day = new Date().toDateString();
+    if (day === dayNow) return;
+    dayNow = day;
+    audit('newday', '', { message: 'เริ่มวันใหม่ เพดานต่อวันของทุกเครื่องเริ่มนับใหม่' });
+    host.log('A new day: the daily cap of every phone counts from zero again.');
+    publish();
+  }, 20000).unref();
+
   /** Reset the stop of one phone, or with no serial the stop of everything. */
   function unhalt(serial) {
     if (serial) {
