@@ -323,7 +323,7 @@ const inputLabel = (number) => `ข้อมูลช่อง ${number}`;
 function workflowInputCount(text) {
   let count = 0;
   for (const step of workflowSteps(text)) {
-    if (!['text', 'run', 'pick'].includes(step.command)) continue;
+    if (!['text', 'run', 'pick', 'taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checkamount', 'stoptext'].includes(step.command)) continue;
     for (const match of step.argument.matchAll(/\{(\d{1,2})\}/g)) count = Math.max(count, Number(match[1]));
   }
   return count;
