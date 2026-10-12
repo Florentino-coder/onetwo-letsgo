@@ -62,6 +62,7 @@ const jobs = createJobs({
     if (Notification.isSupported()) new Notification({ title: APP_NAME, body }).show();
   },
   runWorkflow: (request) => runWorkflow(request),
+  runWorkflowOne: (request) => runWorkflowOne(request),
   onlineSerials: () => [...devices.values()].filter((device) => device.status === 'device').map((device) => device.serial),
   busy: () => jobRunning,
   inputsOf: (text) => logic.workflowInputs(logic.parseWorkflow(text)),
@@ -403,6 +404,7 @@ const ACTIONS = {
 /** One fleet job at a time: run `worker` on each online device, a few devices in parallel. */
 async function runJob(label, serials, worker) {
   if (jobRunning) throw new Error(`Wait for "${jobRunning}" to finish first.`);
+  if (soloRuns.size) throw new Error('Wait for the withdrawals being paid to finish first, or switch automatic mode off.');
   const targets = onlineDevices(serials);
   if (!targets.length) throw new Error('Select one or more online devices first.');
   jobRunning = label;
@@ -606,29 +608,58 @@ function planWorkflow(text, values, serials) {
 }
 
 /** Run a workflow on each device. `values` fill the {1}, {2}… of its text steps. */
+/** Run a workflow's steps on one phone, telling the timeline of each. Resolves with a short summary. */
+async function runWorkflowSteps(device, steps, run, workflowName) {
+  for (const [index, step] of steps.entries()) {
+    // The timeline in the workflow view follows these events step by step. A secret step, such
+    // as a key of the PIN, is shown without where it tapped.
+    const entry = { run, name: workflowName, serial: device.serial, label: deviceLabel(device), index, total: steps.length, command: step.command, argument: step.secret ? '•••' : step.argument, note: step.note };
+    const started = Date.now();
+    send('timeline', { ...entry, status: 'running', at: started });
+    try {
+      const detail = await runWorkflowStep(device, step, workflowName);
+      send('timeline', { ...entry, status: 'ok', at: started, ms: Date.now() - started, detail: step.secret ? '' : detail || '' });
+    } catch (error) {
+      send('timeline', { ...entry, status: 'error', at: started, ms: Date.now() - started, detail: error.message });
+      throw new Error(`step ${index + 1} (${step.command}): ${error.message}`);
+    }
+  }
+  return `${steps.length} step(s)`;
+}
+
 function runWorkflow({ name, text, serials, values }) {
   const plans = planWorkflow(text, values, serials);
   const workflowName = String(name || 'Workflow').trim() || 'Workflow';
   workflowRuns += 1;
   const run = workflowRuns;
-  return runJob(`Workflow ${workflowName}`, serials, async (device) => {
-    const steps = plans.get(device.serial);
-    for (const [index, step] of steps.entries()) {
-      // The timeline in the workflow view follows these events step by step. A secret step, such
-      // as a key of the PIN, is shown without where it tapped.
-      const entry = { run, name: workflowName, serial: device.serial, label: deviceLabel(device), index, total: steps.length, command: step.command, argument: step.secret ? '•••' : step.argument, note: step.note };
-      const started = Date.now();
-      send('timeline', { ...entry, status: 'running', at: started });
-      try {
-        const detail = await runWorkflowStep(device, step, workflowName);
-        send('timeline', { ...entry, status: 'ok', at: started, ms: Date.now() - started, detail: step.secret ? '' : detail || '' });
-      } catch (error) {
-        send('timeline', { ...entry, status: 'error', at: started, ms: Date.now() - started, detail: error.message });
-        throw new Error(`step ${index + 1} (${step.command}): ${error.message}`);
-      }
-    }
-    return `${steps.length} step(s)`;
-  });
+  return runJob(`Workflow ${workflowName}`, serials, (device) => runWorkflowSteps(device, plans.get(device.serial), run, workflowName));
+}
+
+// Phones running a workflow of their own, for a withdrawal. Several run side by side; a fleet job
+// waits for all of them, and none starts while a fleet job runs.
+const soloRuns = new Set();
+
+/** Run a workflow on one phone, apart from the fleet's one job at a time. Resolves as a fleet job does. */
+async function runWorkflowOne({ name, text, serial, values }) {
+  if (jobRunning) throw new Error(`Wait for "${jobRunning}" to finish first.`);
+  if (soloRuns.has(serial)) throw new Error('That phone is already running a workflow.');
+  const [device] = onlineDevices([serial]);
+  if (!device) throw new Error(`${serial} is not online.`);
+  const plans = planWorkflow(text, values, [serial]);
+  const workflowName = String(name || 'Workflow').trim() || 'Workflow';
+  workflowRuns += 1;
+  const run = workflowRuns;
+  soloRuns.add(serial);
+  try {
+    const detail = await runWorkflowSteps(device, plans.get(serial), run, workflowName);
+    log(`Workflow ${workflowName} ok on ${deviceLabel(device)}: ${detail}`, 'info', serial);
+    return { label: `Workflow ${workflowName}`, results: [{ serial, label: deviceLabel(device), ok: true, detail }], failed: 0 };
+  } catch (error) {
+    log(`Workflow ${workflowName} failed on ${deviceLabel(device)}: ${error.message}`, 'error', serial);
+    return { label: `Workflow ${workflowName}`, results: [{ serial, label: deviceLabel(device), ok: false, detail: error.message }], failed: 1 };
+  } finally {
+    soloRuns.delete(serial);
+  }
 }
 
 // ── web API ──────────────────────────────────────────────────────────────
@@ -1348,7 +1379,7 @@ function registerIpc() {
   handle('jobs:orders', () => jobs.refreshOrders());
   handle('jobs:pay', ({ key }) => jobs.pay(String(key || '')));
   handle('jobs:payauto', ({ on }) => jobs.setPayAuto(Boolean(on)));
-  handle('jobs:unhalt', () => jobs.unhalt());
+  handle('jobs:unhalt', (request) => jobs.unhalt(request && request.serial ? String(request.serial) : ''));
   handle('jobs:resolve', ({ key, note }) => jobs.resolve(String(key || ''), note));
 
   handle('update:check', () => runUpdateCheck());

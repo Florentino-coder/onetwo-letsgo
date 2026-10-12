@@ -1561,9 +1561,15 @@ const VIEWS = {
     };
     const baht = (amount) => Number(amount).toLocaleString('th-TH', { minimumFractionDigits: 2 });
     const state = JOB_STATUS[jobs.status.code] || jobs.status.code;
-    const busy = ['running', 'checking'].includes(jobs.status.code);
+    // Phones that are paying or resting now, and the rows they are on.
+    const paying = jobs.paying || {};
+    const stops = jobs.stops || {};
+    const flying = new Set(Object.values(paying).map((each) => each.key).filter(Boolean));
+    const busy = flying.size > 0;
     const today = new Date().toDateString();
-    const bad = (entry) => ['failed', 'started', 'paid'].includes(entry.state);
+    // A row that did not finish. One a phone is on right now is not a fault yet.
+    const bad = (entry) => ['failed', 'started', 'paid'].includes(entry.state) && !flying.has(entry.key);
+    const PHONE_STATE = { running: 'กำลังโอน', checking: 'อ่านสลิป', closing: 'ปิดงาน', resting: 'กำลังพัก' };
     const open = jobs.history.filter(bad);
     const tab = S.withdrawTab || 'queue';
     const tabs = [['queue', `คิว (${orders.list.filter((order) => !order.state).length})`], ['history', `ประวัติ (${jobs.history.length})`], ['log', 'บันทึก'], ['settings', 'ตั้งค่า']];
@@ -1582,20 +1588,23 @@ const VIEWS = {
       // At its cap, or with less left than its smallest amount, a phone takes nothing more today.
       const moneyOut = balance !== null && device.amountMin !== null && balance < device.amountMin;
       const spentOut = (device.pay.cap !== null && spent >= device.pay.cap) || moneyOut;
-      const ready = device.online && device.payOn && device.amountMin !== null && !spentOut && !switchedOff;
-      const working = busy && jobs.history[0] && jobs.history[0].serial === device.serial && jobs.history[0].state === 'started';
+      const stop = stops[device.serial] || null;
+      const ready = device.online && device.payOn && device.amountMin !== null && !spentOut && !switchedOff && !stop;
+      const working = paying[device.serial] ? PHONE_STATE[paying[device.serial].state] || 'กำลังทำงาน' : '';
       const problems = [
+        stop && `หยุด: ${stop.message}`,
         !device.online && 'ออฟไลน์', device.amountMin === null && 'ยังไม่ตั้งช่วงยอด', !device.hasPin && 'ยังไม่ตั้ง PIN', !device.pay.account && 'ยังไม่ใส่บัญชีของเครื่อง',
         device.pay.cap !== null && spent >= device.pay.cap && 'ถึงเพดานวันนี้แล้ว',
         moneyOut && 'เงินหมด: ยอดคงเหลือต่ำกว่ายอดต่ำสุด เติมเงินเข้าบัญชีนี้',
         switchedOff && 'บัญชีนี้ปิดสถานะอยู่ในหลังบ้าน',
         device.pay.account && jobs.accounts.fresh && !listed && 'ไม่พบบัญชีนี้ในหน้าปรับยอดเงินบัญชีถอน',
       ].filter(Boolean);
-      return h('div', { class: `pay-card ${ready ? '' : 'idle'} ${S.focus === device.serial ? 'selected' : ''}` },
+      return h('div', { class: `pay-card ${ready ? '' : 'idle'} ${stop ? 'stopped' : ''} ${S.focus === device.serial ? 'selected' : ''}` },
         h('div', { class: 'row' },
           h('strong', { class: 'grow pay-name' }, device.label),
-          h('span', { class: `badge ${working ? 'live' : ready ? 'online' : device.online ? '' : 'error'}` }, working ? 'กำลังโอน' : ready ? 'พร้อม' : !device.online ? 'ออฟไลน์' : switchedOff ? 'บัญชีปิดอยู่' : moneyOut ? 'เงินหมด' : spentOut ? 'เต็มวงเงิน' : 'ไม่รับงาน')),
+          h('span', { class: `badge ${stop ? 'error' : working ? 'live' : ready ? 'online' : device.online ? '' : 'error'}` }, stop ? 'หยุด' : working || (ready ? 'พร้อม' : '') || (!device.online ? 'ออฟไลน์' : switchedOff ? 'บัญชีปิดอยู่' : moneyOut ? 'เงินหมด' : spentOut ? 'เต็มวงเงิน' : 'ไม่รับงาน'))),
         h('div', { class: 'mono muted' }, device.serial),
+        paying[device.serial] && paying[device.serial].key && h('div', { class: 'mono' }, `${baht(paying[device.serial].amount)} · ${paying[device.serial].bank || ''}`),
         device.pay.account && h('div', { class: 'pay-account' },
           h('div', null, device.pay.bank || '—'),
           h('div', { class: 'mono' }, device.pay.account),
@@ -1609,6 +1618,14 @@ const VIEWS = {
           h('dt', null, 'วันนี้'), h('dd', null, `${paid.length} รายการ · ${baht(paid.reduce((sum, entry) => sum + Number(entry.amount), 0))}`),
           device.pay.cap !== null && h('dt', null, 'เพดาน'), device.pay.cap !== null && h('dd', null, `ใช้ ${baht(spent)} จาก ${baht(device.pay.cap)}`)),
         problems.length > 0 && h('div', { class: 'job-warn-text' }, problems.join(' · ')),
+        stop && h('div', { class: 'row wrap' },
+          h('span', { class: 'muted grow' }, `${timeOf(stop.at)} · ตรวจในแอปธนาคารของเครื่องนี้ก่อนว่าเงินออกหรือไม่`),
+          h('button', {
+            class: 'btn danger',
+            onclick: async () => {
+              if (await confirmDialog('รีเซ็ตเครื่องนี้?', `${device.label}\nยืนยันว่าตรวจรายการที่ผิดพลาดแล้ว รายการนั้นจะไม่ถูกทำซ้ำ เครื่องนี้จะกลับมารับงาน เครื่องอื่นไม่ถูกแตะ`, 'รีเซ็ต')) apply(() => call('jobs:unhalt', { serial: device.serial }));
+            },
+          }, 'รีเซ็ตเครื่องนี้')),
         h('div', { class: 'row wrap pay-range' },
           h('input', { class: 'field', type: 'number', min: 1, placeholder: 'ตั้งแต่', value: device.amountMin ?? '', 'aria-label': `ยอดต่ำสุดของ ${device.label}`, id: `pay-min-${device.serial}` }),
           h('input', { class: 'field', type: 'number', min: 1, placeholder: 'ไม่เกิน', value: device.amountMax ?? '', 'aria-label': `ยอดสูงสุดของ ${device.label}`, id: `pay-max-${device.serial}` }),
@@ -1620,17 +1637,18 @@ const VIEWS = {
     };
 
     const row = (order) => {
-      const stopped = halt && halt.key === order.key;
-      const label = stopped ? 'หยุด: ต้องตรวจด้วยมือ' : WITHDRAW_STATE[order.state] || (order.serial ? 'รอทำ' : order.short === 'cap' ? 'เครื่องถึงเพดานวันนี้' : order.short === 'balance' ? 'ยอดคงเหลือของเครื่องไม่พอ' : order.short === 'off' ? 'บัญชีของเครื่องปิดอยู่ในหลังบ้าน' : 'ไม่มีเครื่องรับยอดนี้');
+      const stopped = (halt && halt.key === order.key) || Object.values(stops).some((each) => each.key === order.key);
+      const onPhone = Object.entries(paying).find(([, each]) => each.key === order.key);
+      const label = stopped ? 'หยุด: ต้องตรวจด้วยมือ' : onPhone ? PHONE_STATE[onPhone[1].state] || 'กำลังทำงาน' : WITHDRAW_STATE[order.state] || (order.serial ? 'รอทำ' : order.short === 'cap' ? 'เครื่องถึงเพดานวันนี้' : order.short === 'balance' ? 'ยอดคงเหลือของเครื่องไม่พอ' : order.short === 'off' ? 'บัญชีของเครื่องปิดอยู่ในหลังบ้าน' : order.short === 'stopped' ? 'เครื่องหยุดอยู่ รอรีเซ็ต' : 'ไม่มีเครื่องรับยอดนี้');
       return h('tr', { class: stopped || bad(order) ? 'bad' : order.state === 'done' ? 'good' : '' },
         h('td', { class: 'mono num' }, baht(order.amount)),
         h('td', null, h('div', null, order.bank), h('div', { class: 'mono muted' }, order.account)),
         h('td', null, h('div', null, order.holder || '—'), h('div', { class: 'mono muted' }, order.requested)),
         h('td', null, order.phone || '—'),
-        h('td', null, h('span', { class: `badge ${stopped || bad(order) ? 'error' : order.state === 'done' ? 'online' : ''}`, title: order.detail || '' }, label)),
+        h('td', null, h('span', { class: `badge ${stopped || bad(order) ? 'error' : onPhone ? 'live' : order.state === 'done' ? 'online' : ''}`, title: order.detail || '' }, label)),
         h('td', null, h('button', {
           class: 'btn',
-          disabled: Boolean(order.state) || !order.serial || Boolean(halt) || busy || jobs.payAuto,
+          disabled: Boolean(order.state) || !order.serial || Boolean(halt) || Boolean(onPhone) || jobs.payAuto,
           onclick: async () => {
             const dry = config.closeDry ? '\n\nโหมดทดลองเปิดอยู่: โอนจริง แต่ไม่ปิดงานในหลังบ้าน ต้องปิดงานนี้เอง' : '\n\nสลิปตรงแล้วแอปจะปิดงานในหลังบ้านเอง';
             if (!(await confirmDialog('ทำรายการนี้?', `โอน ${baht(order.amount)} บาท\nไป ${order.bank} ${order.account}\nจากเครื่อง ${order.phone} ด้วย "${config.workflow}"${dry}`, 'โอน'))) return;
@@ -1661,7 +1679,7 @@ const VIEWS = {
       queue: () => [
         h('div', { class: 'row wrap' },
           h('button', { class: 'btn primary', onclick: () => apply(() => call('jobs:open')) }, jobs.open ? (jobs.hidden ? 'แสดงหน้าต่างหลังบ้าน (ซ่อนอยู่ ยังทำงาน)' : 'ไปที่หน้าต่างหลังบ้าน') : 'เปิดหน้าล็อกอิน'),
-          h('button', { class: 'btn', disabled: !jobs.open || busy, onclick: () => apply(() => call('jobs:orders')) }, 'อ่านรายการตอนนี้'),
+          h('button', { class: 'btn', disabled: !jobs.open, onclick: () => apply(() => call('jobs:orders')) }, 'อ่านรายการตอนนี้'),
           h('span', { class: 'muted grow' }, `${WITHDRAW_NOTE[orders.note] || orders.note}${orders.at ? ` · ${timeOf(orders.at)}` : ''}${orders.error ? ` · อ่านหน้าเว็บไม่ได้: ${orders.error}` : ''}`)),
         !config.url && h('p', { class: 'hint job-warn' }, 'ยังไม่ได้ใส่ที่อยู่หลังบ้าน ใส่ที่เมนู "รับงานจากเว็บ" ข้อ 1'),
         orders.list.length

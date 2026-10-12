@@ -513,6 +513,9 @@ function createJobs(host) {
       orders: { ...ordersView(), error: orders.error || '' },
       payAuto,
       halt: halted(),
+      // The phones that are stopped, and the phones that are paying or resting now, by serial.
+      stops: stops(),
+      paying: Object.fromEntries(paying),
       phones: host.phones().map((phone) => ({ ...phone, spent: spentToday(phone.serial) })),
       // The shop's accounts as the back office lists them, by account number.
       accounts: { at: accounts.at, note: accounts.note, error: accounts.error || '', fresh: accounts.note === 'ok' && Date.now() - accounts.at <= ACCOUNTS_FRESH_MS, map: accounts.map },
@@ -749,6 +752,24 @@ function createJobs(host) {
   }
 
   /**
+   * Run the paying workflow on one phone, apart from what other phones are doing, with the
+   * workflow that enters the app or the one that goes on from the last job put before it.
+   */
+  async function runOnPhone(current, text, serial, values, key) {
+    const entering = host.store.state.workflows[current.enter];
+    if (current.enter && !entering) throw new Error(`The workflow for entering the app, "${current.enter}", is not saved.`);
+    const signIn = Boolean(entering) && !(lastGood.has(serial) && Date.now() - lastGood.get(serial) < current.stay * 1000);
+    const going = !signIn && entering && current.again ? host.store.state.workflows[current.again] : '';
+    if (!signIn && entering && current.again && !going) throw new Error(`The workflow for going on to the next job, "${current.again}", is not saved.`);
+    lastGood.delete(serial);
+    if (entering) host.log(`Withdrawal ${key} on ${serial}: ${signIn ? `entering the app with ${current.enter} first` : `the app is taken to be signed in still${going ? `, going on with ${current.again}` : ''}`}.`);
+    const outcome = await host.runWorkflowOne({ name: current.workflow, text: signIn ? `${entering}\n${text}` : going ? `${going}\n${text}` : text, serial, values });
+    const failure = outcome.results.find((result) => !result.ok);
+    if (failure) throw new Error(`${failure.label}: ${failure.detail}`);
+    lastGood.set(serial, Date.now());
+  }
+
+  /**
    * Put to rest each phone that ended a job well and has had none since for `stay` seconds. A
    * workflow that fails here moved no money, so it is logged and nothing is stopped.
    */
@@ -757,24 +778,28 @@ function createJobs(host) {
     if (!current.rest || !current.enter || !current.stay || working || host.busy()) return;
     const text = host.store.state.workflows[current.rest];
     if (!text) return;
-    const idle = [...lastGood.keys()].filter((serial) => Date.now() - lastGood.get(serial) >= current.stay * 1000);
+    const idle = [...lastGood.keys()].filter((serial) => !paying.has(serial) && Date.now() - lastGood.get(serial) >= current.stay * 1000);
     if (!idle.length) return;
     // Rested or not, these phones are no longer taken to be on the paying screen.
     for (const serial of idle) lastGood.delete(serial);
     const online = idle.filter((serial) => host.onlineSerials().includes(serial));
     if (!online.length) return;
-    working = true;
-    try {
-      const outcome = await host.runWorkflow({ name: current.rest, text, serials: online, values: [] });
-      const failure = outcome.results.find((result) => !result.ok);
-      audit('rest', '', { serials: online, message: failure ? `${failure.label}: ${failure.detail}` : online.join(', ') });
-      if (failure) host.log(`Resting with ${current.rest} failed on ${failure.label}: ${failure.detail}`, 'error');
-    } catch (error) {
-      host.log(`Resting with ${current.rest} failed: ${error.message}`, 'error');
-    } finally {
-      working = false;
-      publish();
-    }
+    // A phone at rest takes no row until its rest is over.
+    for (const serial of online) paying.set(serial, { key: '', amount: '', state: 'resting', at: Date.now() });
+    publish();
+    await Promise.all(online.map(async (serial) => {
+      try {
+        const outcome = await host.runWorkflowOne({ name: current.rest, text, serial, values: [] });
+        const failure = outcome.results.find((result) => !result.ok);
+        audit('rest', '', { serial, message: failure ? `${failure.label}: ${failure.detail}` : serial });
+        if (failure) host.log(`Resting with ${current.rest} failed on ${failure.label}: ${failure.detail}`, 'error');
+      } catch (error) {
+        host.log(`Resting with ${current.rest} failed on ${serial}: ${error.message}`, 'error');
+      } finally {
+        paying.delete(serial);
+      }
+    }));
+    publish();
   }
 
   async function loadEngine(contents) {
@@ -943,7 +968,22 @@ function createJobs(host) {
 
   /** Why everything is stopped, or null. Kept in the settings, so a restart does not clear it. */
   const halted = () => (host.store.config.withdraw_halt && typeof host.store.config.withdraw_halt === 'object' ? host.store.config.withdraw_halt : null);
+  /** The phones that are stopped, by serial: { key, message, at }. Kept in the settings too. */
+  const stops = () => (host.store.config.withdraw_stops && typeof host.store.config.withdraw_stops === 'object' ? host.store.config.withdraw_stops : {});
 
+  // Phones that are paying or resting now: serial → { key, amount, state, at }. A phone in here takes no other row.
+  const paying = new Map();
+  // When each phone last began a row, so rows go round the phones and not always to the first.
+  const lastTaken = new Map();
+  // One thing at a time uses the back-office page: reading and searching the list, or closing a job.
+  let pageQueue = Promise.resolve();
+  const withPage = (work) => {
+    const next = pageQueue.then(work, work);
+    pageQueue = next.catch(() => {});
+    return next;
+  };
+
+  /** Stop everything: a fault of the back office, which is the same for every phone. */
   function halt(key, message) {
     payAuto = false;
     stopAuto();
@@ -955,20 +995,45 @@ function createJobs(host) {
     host.log(`Withdrawals stopped: ${message}`, 'error');
   }
 
-  function unhalt() {
-    if (halted()) audit('reset', halted().key, { was: halted().message });
-    delete host.store.config.withdraw_halt;
+  /** Stop one phone: a fault on that phone. The others go on paying. */
+  function stopPhone(serial, key, message) {
+    lastGood.delete(serial);
+    host.store.config.withdraw_stops = { ...stops(), [serial]: { key: key || '', message, at: new Date().toISOString() } };
     host.store.saveConfig();
-    lastGood.clear();
-    host.log('Withdrawals: the stop was reset.');
+    audit('halt', key, { serial, message });
+    host.log(`Withdrawals stopped on ${serial}: ${message}`, 'error');
+    if (host.notify) host.notify(`${serial}: หยุดทำงาน ตรวจรายการก่อนรีเซ็ต`);
+  }
+
+  /** Reset the stop of one phone, or with no serial the stop of everything. */
+  function unhalt(serial) {
+    if (serial) {
+      const was = stops()[serial];
+      if (was) audit('reset', was.key, { serial, was: was.message });
+      const rest = { ...stops() };
+      delete rest[serial];
+      host.store.config.withdraw_stops = rest;
+      host.store.saveConfig();
+      lastGood.delete(serial);
+      host.log(`Withdrawals: the stop on ${serial} was reset.`);
+    } else {
+      if (halted()) audit('reset', halted().key, { was: halted().message });
+      delete host.store.config.withdraw_halt;
+      host.store.saveConfig();
+      lastGood.clear();
+      host.log('Withdrawals: the stop was reset.');
+    }
     publish();
     return view();
   }
 
   /** The online phone whose amount range holds this amount, or null. A phone with no range takes nothing. */
-  function phoneFor(amount) {
+  function phoneFor(amount, free = false) {
     const value = Number(amount);
-    return host.phones().find((phone) => phone.min !== null && phone.max !== null && value >= phone.min && value <= phone.max && !shortOf(phone, value)) || null;
+    const able = host.phones().filter((phone) => phone.min !== null && phone.max !== null && value >= phone.min && value <= phone.max && !shortOf(phone, value) && !(free && paying.has(phone.serial)));
+    // The phone that has waited longest takes the row, so the work is shared out.
+    able.sort((a, b) => (lastTaken.get(a.serial) || 0) - (lastTaken.get(b.serial) || 0));
+    return able[0] || null;
   }
 
   // ── the shop's accounts ──
@@ -1156,6 +1221,7 @@ function createJobs(host) {
 
   /** Why a phone in range cannot pay this amount now, or '' when it can. */
   function shortOf(phone, value) {
+    if (stops()[phone.serial]) return 'stopped';
     if (phone.cap !== null && spentToday(phone.serial) + value > phone.cap) return 'cap';
     const listed = accountOf(phone);
     // Switched off in the back office, an account is not offered on the close-job form: a row paid from it could not be closed.
@@ -1174,7 +1240,11 @@ function createJobs(host) {
    * with the phones' amount range in the page's own filter. Nothing on the page is changed
    * except its filter.
    */
-  async function readOrders(refresh) {
+  function readOrders(refresh) {
+    return withPage(() => readOrdersNow(refresh));
+  }
+
+  async function readOrdersNow(refresh) {
     const at = Date.now();
     if (!window) {
       orders = { at, note: 'closed', list: [] };
@@ -1195,7 +1265,7 @@ function createJobs(host) {
     else if (page.path !== profile.order_page_url_hint || !onTab(page.tab)) {
       note = page.path === profile.order_page_url_hint ? 'wrongTab' : 'opening';
       // Take the window to the list of approved withdrawals, but not over and over.
-      if (current.watch && !working && at - lastOpened > 15000) {
+      if (current.watch && !working && !paying.size && at - lastOpened > 15000) {
         lastOpened = at;
         contents.loadURL(new URL(`${profile.order_page_url_hint}?${profile.withdraw_notify_tab_query || ''}`, contents.getURL()).href);
         note = 'opening';
@@ -1206,7 +1276,9 @@ function createJobs(host) {
       // Ask the page only for what a phone can pay now: no more than its account holds. With every
       // phone out of money the whole range is asked for, so the rows that wait can still be seen.
       const able = phones.filter((phone) => roomOf(phone) >= phone.min);
-      const range = current.filter && phones.length ? [String(Math.min(...(able.length ? able : phones).map((phone) => phone.min))), String(able.length ? Math.max(...able.map(roomOf)) : Math.max(...phones.map((phone) => phone.max)))] : null;
+      // A row that is being paid stays asked for, whatever its phone can pay now: it is closed on this page.
+      const flying = [...paying.values()].map((each) => Number(each.amount)).filter((amount) => amount > 0);
+      const range = current.filter && phones.length ? [String(Math.min(...(able.length ? able : phones).map((phone) => phone.min), ...flying)), String(Math.max(able.length ? Math.max(...able.map(roomOf)) : Math.max(...phones.map((phone) => phone.max)), ...flying))] : null;
       await loadEngine(contents);
       await contents.executeJavaScript(searchScript(profile, range), true);
       await sleep(SEARCH_SETTLE_MS);
@@ -1234,41 +1306,59 @@ function createJobs(host) {
   }
 
   /**
-   * Pay one row and close it. Anything that goes wrong once the phone has been touched stops all
-   * withdrawals until the operator has looked and reset the stop: the app cannot know by itself
-   * whether money moved.
+   * Pay one row and close it. Rows are paid at the same time on different phones; a phone pays one
+   * row at a time, and a row goes to one phone. Anything that goes wrong once a phone has been
+   * touched stops that phone until the operator has looked and reset it: the app cannot know by
+   * itself whether money moved. A fault in closing on the page stops everything.
    */
   async function pay(key) {
     if (working) throw new Error('A job is already running.');
     if (halted()) throw new Error('Withdrawals are stopped. Check the row in red, then reset the stop.');
-    working = true;
+    const contents = requireWindow();
+    const current = config();
+    const text = host.store.state.workflows[current.workflow];
+    if (!text) throw new Error('Choose a saved workflow for paying first.');
+    if (host.busy()) throw new Error(`Wait for "${host.busy()}" to finish first.`);
+    if (!closeProfileFor(contents.getURL())) throw new Error('There is no close-job profile for this back-office address.');
+    const listed = orders.list.find((each) => each.key === key);
+    if (!listed) throw new Error('That withdrawal is no longer on the page.');
+    if (ledger[key] || [...paying.values()].some((each) => each.key === key)) throw new Error('That withdrawal was already begun by this app, so it is not begun again.');
+    const phone = phoneFor(listed.amount, true);
+    if (!phone) {
+      if (phoneFor(listed.amount)) throw new Error(`Every phone that can pay ${listed.amount} is busy. Try again in a moment.`);
+      const inRange = host.phones().find((each) => each.min !== null && Number(listed.amount) >= each.min && Number(listed.amount) <= each.max);
+      if (inRange && shortOf(inRange, Number(listed.amount)) === 'stopped') throw new Error(`The phone that takes ${listed.amount} is stopped. Check its row in red, then reset that phone.`);
+      throw new Error(`No online phone can pay ${listed.amount} now.`);
+    }
+    const serial = phone.serial;
+    // The row and the phone are taken from here on, before anything is waited for.
+    const mine = { key, amount: listed.amount, bank: listed.bank, state: 'running', at: Date.now() };
+    paying.set(serial, mine);
+    lastTaken.set(serial, Date.now());
+    const stage = (state) => {
+      mine.state = state;
+      setStatus(state, `${phone.label} · ${listed.amount} · ${listed.bank}`);
+    };
     let order = null;
     let begun = false;
+    let closing = false;
     try {
-      const contents = requireWindow();
-      const current = config();
+      // The row must still be on the page: somebody may have closed it by hand since the list was read.
       await readOrders(false);
       order = orders.list.find((each) => each.key === key);
       if (!order) throw new Error('That withdrawal is no longer on the page.');
       if (ledger[key]) throw new Error('That withdrawal was already begun by this app, so it is not begun again.');
-      const phone = phoneFor(order.amount);
-      if (!phone) throw new Error(`No online phone has an amount range that holds ${order.amount}.`);
-      const text = host.store.state.workflows[current.workflow];
-      if (!text) throw new Error('Choose a saved workflow for paying first.');
-      if (host.busy()) throw new Error(`Wait for "${host.busy()}" to finish first.`);
-      if (!closeProfileFor(contents.getURL())) throw new Error('There is no close-job profile for this back-office address.');
 
       // From here on the phone is touched: every fault is a stop.
       begun = true;
-      const serial = phone.serial;
       mark(order, 'started', { serial, phone: phone.label });
       audit('start', key, { ...order, serial, phone: phone.label, workflow: current.workflow });
-      setStatus('running', `${order.amount} · ${order.bank}`);
+      stage('running');
       const since = await host.phoneClock(serial);
-      await runWithEntry(current, text, [serial], [order.account, typedAmount(order.amount), order.bank], key);
+      await runOnPhone(current, text, serial, [order.account, typedAmount(order.amount), order.bank], key);
       audit('workflow', key, { serial });
 
-      setStatus('checking', `${order.amount} · ${order.bank}`);
+      stage('checking');
       const read = await host.readSlip(serial, since);
       if (!read.file) throw new Error('The workflow ran, but the phone saved no new picture, so there is no slip to check.');
       // A slip is proof that money left the account, whatever the checks below make of it.
@@ -1281,62 +1371,75 @@ function createJobs(host) {
       if (phone.account && !logic.maskAgrees(slip.sender_account_masked, phone.account)) wrong.push(`the paying account (slip ${slip.sender_account_masked || 'unread'})`);
       if (phone.bank && logic.bankCode(phone.bank) && slip.bank && logic.bankCode(phone.bank) !== slip.bank) wrong.push(`the paying bank (slip ${slip.bank})`);
       wrong.push(...logic.verifyScreen(read.text, [], current.expect));
-      audit('slip', key, { file: read.file, slip, agrees: !wrong.length, wrong });
+      audit('slip', key, { serial, file: read.file, slip, agrees: !wrong.length, wrong });
       if (wrong.length) throw new Error(`The slip does not agree on ${wrong.join(', ')}. Picture: ${read.file}`);
       mark(order, 'paid', { slip: read.file });
       host.spend(serial, order.amount);
       // Until the list is read again, what it said is too high by what was just paid.
-      const listed = accounts.map[phone.account];
-      if (listed && listed.balance !== null) listed.balance = Math.round((listed.balance - Number(order.amount)) * 100) / 100;
+      const account = accounts.map[phone.account];
+      if (account && account.balance !== null) account.balance = Math.round((account.balance - Number(order.amount)) * 100) / 100;
 
       try {
-        setStatus('closing', `${order.amount} · ${order.bank}`);
-        // The account is what tells this row from every other on the page; the amount is the fallback.
-        await closeByProfile(contents, current, read.text, [order.account], key, [order.account]);
+        stage('closing');
+        closing = true;
+        // Closing waits its turn for the page. The account is what tells this row from every other
+        // on the page; the amount is the fallback.
+        await withPage(() => closeByProfile(contents, current, read.text, [order.account], key, [order.account]));
       } catch (error) {
         if (!/^Trial mode/.test(error.message)) throw error;
         // Paid, and left open on purpose: the operator closes this one by hand.
         mark(order, 'trial');
-        audit('trial', key);
+        audit('trial', key, { serial });
         payAuto = false;
-        setStatus('done', `${order.amount} · paid, not closed (trial)`);
+        setStatus('done', `${phone.label} · ${order.amount} · paid, not closed (trial)`);
         return view();
       }
       mark(order, 'done');
-      audit('done', key);
+      audit('done', key, { serial });
       host.log(`Withdrawal ${order.amount} to ${order.bank} paid from ${phone.label} and closed.`);
-      setStatus('done', `${order.amount} · ${order.bank}`);
+      setStatus('done', `${phone.label} · ${order.amount} · ${order.bank}`);
       return view();
     } catch (error) {
       if (begun) {
         mark(order, 'failed', { detail: error.message });
-        audit('error', key, { message: error.message });
-        halt(key, error.message);
+        audit('error', key, { serial, message: error.message });
+        // The phone did its part when the fault is in closing: that is the page's fault, and every phone's.
+        if (closing) halt(key, error.message);
+        else stopPhone(serial, key, error.message);
       }
-      setStatus('error', error.message);
+      setStatus('error', `${phone.label}: ${error.message}`);
       throw error;
     } finally {
-      working = false;
+      paying.delete(serial);
       await readOrders(false).catch(() => {});
       publish();
     }
   }
 
-  /** Each turn: bring the list up to date, and in automatic mode pay the first row that is free to pay. */
+  /** Each turn: bring the list up to date, and in automatic mode give every free phone a row to pay. */
   async function payTick() {
-    if (!window || working || auto || recording || host.busy()) return;
+    if (!window || working || auto || recording) return;
     try {
       const before = JSON.stringify(orders);
       // With the watch switched off the page is only read, never searched or moved.
-      await readOrders(config().watch);
+      await readOrders(config().watch && !host.busy());
       const known = JSON.stringify(accounts);
       await readAccounts().catch((error) => { accounts = { at: Date.now(), note: 'error', map: {}, error: error.message }; });
       if (JSON.stringify(orders) !== before || JSON.stringify(accounts) !== known) publish();
       checkFunds();
-      const next = payAuto && !halted() && orders.note === 'ok' ? ordersView().list.find((order) => !order.state && order.serial) : null;
-      if (next) await pay(next.key).catch(() => {});
-      // With nothing to pay, a phone left waiting too long is put to rest.
-      else await restTick();
+      if (host.busy()) return;
+      let began = 0;
+      if (payAuto && !halted() && orders.note === 'ok') {
+        for (const order of orders.list) {
+          if (ledger[order.key] || [...paying.values()].some((each) => each.key === order.key)) continue;
+          if (!phoneFor(order.amount, true)) continue;
+          // Not waited for: the phones pay side by side. A fault stops its own phone.
+          pay(order.key).catch(() => {});
+          began += 1;
+        }
+      }
+      // A phone left waiting too long with nothing to pay is put to rest.
+      if (!began) await restTick();
     } catch (error) {
       // Reading the page failed: say so, and try again next turn. Nothing was paid.
       orders = { at: Date.now(), note: 'ok', list: [], error: error.message };
@@ -1380,6 +1483,12 @@ function createJobs(host) {
 
   async function refreshOrders() {
     if (working) return view();
+    // While a phone pays, the turn of the clock keeps the list up to date; it is not searched out of turn.
+    if (paying.size) {
+      await readOrders(false);
+      publish();
+      return view();
+    }
     lastSearch = 0;
     await readOrders(true);
     lastAccounts = 0;

@@ -329,6 +329,7 @@ table.orders tr.good td { opacity: 0.6; }
 .audit { display: flex; flex-direction: column; gap: 4px; font-size: 12px; overflow-wrap: anywhere; user-select: text; }
 .audit .bad { color: var(--danger); }
 .pay-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 12px; }
+.pay-card.stopped { border-color: var(--danger); background: var(--danger-soft); }
 .pay-card { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); }
 .pay-card.idle { opacity: 0.75; }
 .pay-card.selected { border-color: var(--accent); }
