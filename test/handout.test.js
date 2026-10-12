@@ -176,3 +176,20 @@ test('the program is the studio unless it is built or started as the user progra
   assert.equal(editionOf(null, { ONETWO_EDITION: 'USER' }), 'user');
   assert.equal(editionOf({ edition: 'anything' }, {}), 'studio');
 });
+
+test('the user program\'s update leaves out the studio\'s window and the back-office profiles', () => {
+  const zlib = require('node:zlib');
+  const { buildUserUpdate } = require('../tools/release-user.js');
+  const { unpack } = require('../app/updater.js');
+  const root = path.join(__dirname, '..');
+  const { bundle, latest } = buildUserUpdate(root, '9.9.9', owner.privateKey);
+  const names = Object.keys(JSON.parse(zlib.gunzipSync(bundle).toString('utf8')).files);
+  for (const needed of ['app/main.js', 'app/boot.js', 'app/jobs.js', 'app/user/user.js', 'app/user/index.html', 'app/closejob/engine.js', 'app/ui/fonts/Sarabun-Regular.ttf', 'app/update-public.pem']) assert.ok(names.includes(needed), needed);
+  assert.deepEqual(names.filter((name) => /^app\/ui\/[^/]+\.(js|html|css)$|^app\/closejob\/profiles\/|^app\/packs\//.test(name)), []);
+  // The programs unpack it with the check they make on every update.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'onetwo-update-'));
+  unpack(bundle, owner.publicKey, latest.signature, '9.9.9', dir);
+  assert.ok(fs.existsSync(path.join(dir, '9.9.9', 'app', 'user', 'user.js')));
+  assert.throws(() => unpack(bundle, other.publicKey, latest.signature, '9.9.9', dir));
+  assert.throws(() => buildUserUpdate(root, 'next', owner.privateKey), /version/);
+});

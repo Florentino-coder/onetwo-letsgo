@@ -190,6 +190,8 @@ function resolveTool(name, configured) {
   }
   if (process.env.LOCALAPPDATA) candidates.push(path.join(process.env.LOCALAPPDATA, 'Android', 'Sdk', 'platform-tools', exe));
   candidates.push(path.join(baseDir, 'tools', name, exe));
+  // An installed copy brings its own tools beside the program.
+  if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'tools', name, exe));
   return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 }
 
@@ -1627,7 +1629,8 @@ function registerIpc() {
       phone: { model: device ? device.model || '' : '', width: size ? size.width : 0, height: size ? size.height : 0 },
       workflows, pickSets,
       jobs: Object.fromEntries(pack.JOB_KEYS.map((key) => [key, current[key]])),
-      profile: fs.existsSync(profileFile) ? JSON.parse(fs.readFileSync(profileFile, 'utf8')) : null,
+      // The steps travel; the address of the owner's own back office and the owner's notes do not.
+      profile: fs.existsSync(profileFile) ? { ...JSON.parse(fs.readFileSync(profileFile, 'utf8')), domain_patterns: [], _notes: undefined } : null,
     }, handoutKey());
     // What was just built must open with the program's own public key.
     return { text, opened: pack.open(text, handoutPublicKey(), VERSION) };
