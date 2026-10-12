@@ -1,9 +1,9 @@
 {
   "name": "adb-onetwo",
-  "productName": "ADB-OneTwo",
+  "productName": "OneTwo ADB Studio",
   "version": "0.20.1",
   "private": true,
-  "description": "ADB-OneTwo: local USB controller for a rack of Android phones",
+  "description": "OneTwo ADB Studio: builds and tests the workflows that OneTwo ADB pays with",
   "main": "app/boot.js",
   "scripts": {
     "start": "electron .",
@@ -11,8 +11,9 @@
     "test": "node --test",
     "icons": "electron tools/make-icons.js",
     "release": "node tools/release.js",
-    "build:user": "node tools/build-user.js",
-    "release:user": "node tools/release-user.js"
+    "build:user": "node tools/build-app.js user",
+    "release:user": "node tools/release-user.js",
+    "build:studio": "node tools/build-app.js studio"
   },
   "devDependencies": {
     "electron": "^44.5.1",

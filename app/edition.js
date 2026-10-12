@@ -5,7 +5,7 @@
 const path = require('node:path');
 
 const DEVELOPER = 'Florentino356';
-const NAMES = { studio: 'ADB-OneTwo', user: 'OneTwo ADB' };
+const NAMES = { studio: 'OneTwo ADB Studio', user: 'OneTwo ADB' };
 
 /** 'user' for the program handed to other people, else 'studio'. `pkg` is the installed package.json. */
 function editionOf(pkg, env = process.env) {

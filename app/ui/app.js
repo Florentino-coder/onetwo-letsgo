@@ -895,7 +895,7 @@ function renderHeader() {
   $('header').replaceChildren(
     h('img', { class: 'logo', src: 'logo.svg', alt: '', draggable: false }),
     h('div', { class: 'brand' },
-      h('h1', null, 'ADB-OneTwo'),
+      h('h1', null, 'OneTwo ADB Studio'),
       h('div', { class: 'status' }, h('span', { class: `dot ${S.scanning ? 'busy' : online ? 'on' : ''}` }), status)),
     h('div', { class: 'spacer' }),
     // replaceChildren prints a bare `false`, unlike h(), so fall back to an empty string.

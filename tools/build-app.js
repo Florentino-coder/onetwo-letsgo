@@ -1,26 +1,36 @@
 'use strict';
 
-// Owner-only tool. Builds the Windows installer of OneTwo ADB, the program handed to other people:
-//   node tools/build-user.js
-// The installer brings everything a fresh computer needs: the program without the studio's
-// window, ADB, the text reader (Tesseract) with Thai, and the work pack in app/packs/ when there
-// is one. Nothing of the owner's data goes in: no settings, no PIN, no history, no private key.
+// Owner-only tool. Builds a Windows installer of one of the two programs:
+//   node tools/build-app.js user      OneTwo ADB, the program handed to other people
+//   node tools/build-app.js studio    OneTwo ADB Studio, the owner's own
+// An installer brings what a fresh computer needs: the program, ADB, and the text reader
+// (Tesseract) with Thai. The user program goes without the studio's window and with the work
+// pack in app/packs/ when there is one. Nothing of the owner's data goes into either: no
+// settings, no PIN, no history, no private key.
 const fs = require('node:fs');
 const path = require('node:path');
 const { LEFT_OUT } = require('./release-user.js');
+const { NAMES } = require('../app/edition.js');
+
+const edition = process.argv[2];
+if (edition !== 'user' && edition !== 'studio') {
+  console.error('ใส่ว่าจะสร้างตัวไหน: node tools/build-app.js user หรือ node tools/build-app.js studio');
+  process.exit(1);
+}
+const USER = edition === 'user';
 
 const root = path.join(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const out = path.join(root, 'dist');
-const stage = path.join(out, 'user-stage');
-const tools = path.join(out, 'user-tools');
+const stage = path.join(out, `${edition}-stage`);
+const tools = path.join(out, 'tools');
 
 function copyApp(dir) {
   for (const entry of fs.readdirSync(path.join(root, dir), { withFileTypes: true })) {
     const rel = `${dir}/${entry.name}`;
     if (entry.isDirectory()) copyApp(rel);
     // The pack that comes with the program is the one thing under app/packs/ that does go in.
-    else if (!LEFT_OUT.some((pattern) => pattern.test(rel)) || rel === 'app/packs/default.onetwopack') {
+    else if (USER ? !LEFT_OUT.some((pattern) => pattern.test(rel)) || rel === 'app/packs/default.onetwopack' : !rel.startsWith('app/packs/')) {
       fs.mkdirSync(path.dirname(path.join(stage, rel)), { recursive: true });
       fs.copyFileSync(path.join(root, rel), path.join(stage, rel));
     }
@@ -75,14 +85,15 @@ async function main() {
   copyTools();
   const hasPack = fs.existsSync(path.join(stage, 'app', 'packs', 'default.onetwopack'));
   fs.writeFileSync(path.join(stage, 'package.json'), `${JSON.stringify({
-    name: 'onetwo-adb',
-    productName: 'OneTwo ADB',
+    name: USER ? 'onetwo-adb' : 'onetwo-adb-studio',
+    productName: NAMES[edition],
     version: pkg.version,
     private: true,
-    description: 'OneTwo ADB',
+    description: NAMES[edition],
     author: 'Florentino356',
     main: 'app/boot.js',
-    edition: 'user',
+    edition,
+    ...(USER ? {} : { updateUrl: pkg.updateUrl || '' }),
     userUpdateUrl: pkg.userUpdateUrl || '',
   }, null, 2)}\n`);
 
@@ -91,10 +102,10 @@ async function main() {
     projectDir: stage,
     targets: builder.Platform.WINDOWS.createTarget('nsis', builder.Arch.x64),
     config: {
-      appId: 'com.onetwoadb.user',
-      productName: 'OneTwo ADB',
+      appId: USER ? 'com.onetwoadb.user' : 'com.adbonetwo.app',
+      productName: NAMES[edition],
       copyright: 'Florentino356',
-      directories: { output: path.join(out, 'user'), buildResources: path.join(root, 'build') },
+      directories: { output: path.join(out, edition), buildResources: path.join(root, 'build') },
       // The Electron already in node_modules is the one the program was tested with.
       electronDist: path.join(root, 'node_modules', 'electron', 'dist'),
       electronVersion: require('electron/package.json').version,
@@ -102,12 +113,13 @@ async function main() {
       extraResources: [{ from: tools, to: 'tools' }],
       asar: false,
       npmRebuild: false,
-      win: { icon: path.join(root, 'build', 'icon.ico'), artifactName: 'OneTwo-ADB-Setup-${version}.${ext}' },
-      nsis: { oneClick: true, perMachine: false, shortcutName: 'OneTwo ADB', deleteAppDataOnUninstall: false },
+      win: { icon: path.join(root, 'build', 'icon.ico'), artifactName: `${USER ? 'OneTwo-ADB' : 'OneTwo-ADB-Studio'}-Setup-\${version}.\${ext}` },
+      nsis: { oneClick: true, perMachine: false, shortcutName: NAMES[edition], deleteAppDataOnUninstall: false },
       publish: null,
     },
   });
   console.log(`ตัวติดตั้ง: ${made.filter((file) => file.endsWith('.exe')).join(', ')}`);
+  if (!USER) return;
   console.log(hasPack ? 'มีชุดงานมากับตัวติดตั้ง (app/packs/default.onetwopack)' : 'ไม่มีชุดงานมากับตัวติดตั้ง: ผู้ใช้งานต้องนำเข้าชุดงานเองที่หน้าตั้งค่า');
   if (!pkg.userUpdateUrl) console.log('ยังไม่ได้ตั้ง userUpdateUrl ใน package.json: โปรแกรมนี้จะไม่ตรวจอัปเดตและไม่ตรวจรหัสที่ยกเลิก');
 }

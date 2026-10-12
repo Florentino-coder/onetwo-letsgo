@@ -11,6 +11,8 @@ const { edition } = require('./edition.js');
 const EDITION = edition();
 process.env.ONETWO_EDITION = EDITION;
 
+// The studio keeps the window profile it always had, under its old name: the back-office sign-in lives there.
+if (EDITION !== 'user' && !app.commandLine.hasSwitch('user-data-dir')) app.setPath('userData', path.join(app.getPath('appData'), 'ADB-OneTwo'));
 // Dev runs keep data beside the code, where the Python app kept it. Installed builds use userData.
 // Resolved here, not in main.js, because main.js may be running from an update folder.
 const dataDir = process.env.FARM_DATA_DIR
