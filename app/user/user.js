@@ -614,6 +614,12 @@ function openPhone(serial) {
   const payBanks = (S.state.jobs.payBanks || []).map((code) => (S.state.banks || []).find((bank) => bank.code === code)).filter(Boolean);
   // A phone set up before there was a choice pays from the first bank.
   const ownBank = (payBanks.find((bank) => bank.name === device.pay.bank) || payBanks[0] || { name: BANK }).name;
+  // The mark at the head of the window is the chosen bank's, and follows the choice.
+  const headMark = (name) => {
+    const mark = bankMark((payBanks.find((bank) => bank.name === name) || { code: phoneBank(device) }).code, true);
+    mark.id = 'phone-mark';
+    return mark;
+  };
   const save = async () => {
     const value = (id) => $(id).value.trim();
     const calls = [
@@ -637,7 +643,7 @@ function openPhone(serial) {
   const listed = jobs.accounts.fresh && device.pay.account ? jobs.accounts.map[device.pay.account] || null : null;
   $('modal').replaceChildren(h('div', { class: 'veil', onmousedown: (event) => { if (event.target === event.currentTarget) close(); } },
     h('div', { class: 'sheet fixed' },
-      h('div', { class: 'sheet-head' }, bankMark('BBL', true),
+      h('div', { class: 'sheet-head' }, headMark(ownBank),
         h('div', { class: 'x' }, h('div', { class: 't' }, device.label),
           h('div', { class: 'hint' }, [device.model, device.serial, device.online ? 'ต่ออยู่' : 'ออฟไลน์', view.spent ? `จ่ายวันนี้ ${money(view.spent)}` : ''].filter(Boolean).join(' · '))),
         pill(view.word[0], view.word[1]),
@@ -656,7 +662,7 @@ function openPhone(serial) {
             h('input', { class: 'inp', id: 'phone-pin', type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: device.hasPin ? '••••••' : '' }),
             eyeButton('phone-pin', device.hasPin ? serial : ''))),
           // The bank is chosen only when the work pack drives more than one bank's app.
-          payBanks.length > 1 ? field('แอปธนาคารของเครื่อง', h('select', { class: 'inp plain', id: 'phone-bank' }, payBanks.map((bank) => h('option', { value: bank.name, selected: bank.name === ownBank }, bank.name)))) : null,
+          payBanks.length > 1 ? field('แอปธนาคารของเครื่อง', h('select', { class: 'inp plain', id: 'phone-bank', onchange: (event) => $('phone-mark').replaceWith(headMark(event.target.value)) }, payBanks.map((bank) => h('option', { value: bank.name, selected: bank.name === ownBank }, bank.name)))) : null,
           field(payBanks.length > 1 ? 'เลขบัญชีของเครื่อง' : `เลขบัญชี ${BANK} ของเครื่อง`, h('input', { class: 'inp', id: 'phone-account', value: device.pay.account, inputmode: 'numeric' })),
           field('ชื่อบัญชี', h('input', { class: 'inp plain', id: 'phone-holder', value: device.pay.holder }))),
         h('div', { class: 'hint' }, listed && listed.balance !== null ? `หลังบ้าน: คงเหลือ ${money(listed.balance)} · อ่านเมื่อ ${timeOf(jobs.accounts.at)}` : 'หลังบ้านยังไม่แสดงยอดของบัญชีนี้ โปรแกรมใช้ยอดที่ใส่เองด้านล่าง'),

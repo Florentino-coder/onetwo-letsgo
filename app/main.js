@@ -2136,7 +2136,15 @@ if (!app.requestSingleInstanceLock()) {
     if (!USER) startApi();
     else setInterval(enforceLicense, 10 * 60000);
     createWindow();
-    checkUpdateIfDue();
+    // The first start of a new version looks at the channel at once: a work pack that waited
+    // for this version is taken now, not at the next daily check.
+    if (USER && store.config.last_run_version !== VERSION) {
+      store.config.last_run_version = VERSION;
+      store.saveConfig();
+      runUpdateCheck();
+    } else {
+      checkUpdateIfDue();
+    }
     setInterval(checkUpdateIfDue, UPDATE_POLL_MS);
   });
   // The back-office window only hides when it is closed, so it is closed for good before a quit.
