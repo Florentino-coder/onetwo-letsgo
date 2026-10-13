@@ -8,6 +8,7 @@
 :root {
   --ink: #0c0f15; --panel: #141821; --panel2: #1a1f2a; --line: #272d3a; --text: #ece8df; --muted: #8f8c85;
   --gold: #c9a65e; --gold-soft: rgba(201, 166, 94, .13); --good: #74c79a; --bad: #e0736a; --bad-soft: rgba(224, 115, 106, .12);
+  --good-soft: rgba(116, 199, 154, .13); --info: #86b4ea; --info-soft: rgba(134, 180, 234, .14); --idle-soft: rgba(143, 140, 133, .14);
   --display: "Anuphan", "Sarabun", "Leelawadee UI", sans-serif;
   --body: "Anuphan", "Sarabun", "Leelawadee UI", "Segoe UI", sans-serif;
   /* Figures: the same face, every digit one width so amounts line up. */
@@ -35,7 +36,9 @@ button, input, select { font: inherit; color: inherit; }
 .rail .foot { margin-top: auto; padding: 0 10px; font-size: 12.5px; color: var(--muted); line-height: 1.7; }
 .rail .foot .good { color: var(--good); }
 .rail .foot .bad { color: var(--bad); }
-.main { padding: 28px 32px; display: flex; flex-direction: column; gap: 18px; min-height: 0; min-width: 0; overflow-y: auto; }
+.main { padding: 28px 32px; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow-y: auto; }
+/* The page is one column in the middle: on a wide window it does not stretch from edge to edge. */
+.wrap { width: 100%; max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; min-height: 0; flex: 1; }
 
 .mh { display: flex; align-items: center; gap: 16px; }
 .mh .t { font-family: var(--display); font-weight: 600; font-size: 27px; line-height: 1.2; }
@@ -58,7 +61,7 @@ button, input, select { font: inherit; color: inherit; }
 .kpi .v.gold { color: var(--gold); }
 .kpi .v.bad { color: var(--bad); }
 
-.cols { display: grid; grid-template-columns: minmax(270px, 330px) minmax(0, 1fr); gap: 18px; min-height: 0; flex: 1; }
+.cols { display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); gap: 18px; min-height: 0; flex: 1; }
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; flex: none; }
 .pane { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .pane .h { font-size: 12px; letter-spacing: .08em; color: var(--muted); display: flex; margin-bottom: 6px; flex: none; }
@@ -69,12 +72,40 @@ button, input, select { font: inherit; color: inherit; }
 
 .row { display: grid; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
 .row:first-child { border-top: 0; }
-.row.phone { grid-template-columns: minmax(70px, 1fr) minmax(110px, 1.3fr) auto; cursor: pointer; background: none; border-left: 0; border-right: 0; border-bottom: 0; width: 100%; text-align: left; }
-.row.phone:hover span:first-child { color: var(--gold); }
-.row.order { grid-template-columns: 84px minmax(0, 1fr) 106px 116px; }
-.row.order .st { white-space: normal; }
+.row.phone { grid-template-columns: minmax(0, 1fr); gap: 3px; padding: 11px 0; cursor: pointer; background: none; border-left: 0; border-right: 0; border-bottom: 0; width: 100%; text-align: left; }
+.row.phone .top { display: flex; align-items: center; gap: 10px; }
+.row.phone .nm { flex: 1; min-width: 0; font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row.phone:hover .nm { color: var(--gold); }
+.row.order { grid-template-columns: 88px 24px minmax(0, 1fr) 132px; }
 .row > * { min-width: 0; }
-.row.past { grid-template-columns: 84px 96px minmax(140px, 1fr) 128px 104px 52px 150px; }
+.row.past { grid-template-columns: 84px 96px 24px minmax(0, 1fr) 132px; }
+.pane.grow { flex: 1; }
+/* The last cell of a row: what to press or how the row stands, and under it the phone. It never grows. */
+.do { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; min-width: 0; }
+.do .btn { width: 100%; }
+.do small { color: var(--muted); font-size: 12px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; line-height: 1.5; padding: 2px 10px; border-radius: 20px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; flex: none; }
+.pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+.pill.ok { color: var(--good); background: var(--good-soft); }
+.pill.run { color: var(--info); background: var(--info-soft); }
+.pill.warn { color: var(--gold); background: var(--gold-soft); }
+.pill.bad { color: var(--bad); background: var(--bad-soft); }
+.pill.wait { color: var(--muted); background: var(--idle-soft); }
+.pill .mark { width: 16px; height: 16px; }
+.tags { display: flex; flex-wrap: wrap; gap: 8px; flex: none; }
+.mark { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; flex: none; background: var(--panel2); display: inline-block; }
+.mark.letter { display: inline-grid; place-items: center; font-size: 11px; font-weight: 600; color: var(--muted); border: 1px solid var(--line); }
+.mark.big { width: 38px; height: 38px; }
+.who small .lk { font-size: 12px; }
+.who small .acct { font-size: 12px; color: var(--muted); }
+.kpis button.kpi { border: 0; text-align: left; cursor: pointer; color: inherit; font: inherit; }
+.kpis button.kpi:hover .l { color: var(--gold); }
+.opt { display: flex; align-items: center; gap: 14px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+.opt .x { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.4; }
+.opt small { color: var(--muted); font-size: 12.5px; }
+.h + .opt { border-top: 0; }
+.todo { margin: 6px 0 0; padding-left: 20px; color: var(--muted); font-size: 12.5px; user-select: text; }
+.todo li { margin-top: 2px; }
 .finder { display: flex; gap: 10px; align-items: center; flex: none; flex-wrap: wrap; }
 .finder .inp { width: auto; padding: 8px 12px; }
 .finder #find-text { flex: 1 1 260px; max-width: 420px; }
@@ -97,7 +128,7 @@ button, input, select { font: inherit; color: inherit; }
 .b { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .c { font-family: var(--mono); color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .st { text-align: right; font-size: 12.5px; white-space: nowrap; }
-.ok { color: var(--good); } .run { color: var(--gold); } .wait { color: var(--muted); } .bad { color: var(--bad); }
+.ok { color: var(--good); } .run { color: var(--gold); } .warn { color: var(--gold); } .wait { color: var(--muted); } .bad { color: var(--bad); }
 
 .btn { display: inline-flex; align-items: center; justify-content: center; padding: 9px 20px; border-radius: 7px; border: 1px solid var(--line); background: none; color: var(--text); font-weight: 600; font-size: 13.5px; cursor: pointer; white-space: nowrap; }
 .btn:hover { border-color: var(--muted); }
@@ -166,9 +197,19 @@ select.inp { appearance: none; }
 .sheet .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
 .sheet .wide { grid-column: 1 / -1; }
 .sheet .acts { justify-content: flex-end; margin-top: 6px; }
+/* A phone's sheet: its head and its two buttons stay in view, only the fields between them scroll. */
+.sheet.fixed { padding: 0; gap: 0; overflow: hidden; width: min(720px, 100%); }
+.sheet-head { display: flex; align-items: center; gap: 12px; padding: 20px 26px 16px; border-bottom: 1px solid var(--line); flex: none; }
+.sheet-head .x { flex: 1; min-width: 0; }
+.sheet-body { padding: 16px 26px 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.sheet-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 26px; border-top: 1px solid var(--line); flex: none; }
+.sheet .h { font-size: 12px; letter-spacing: .08em; color: var(--muted); }
+.sheet .h.gap { margin-top: 8px; }
+.sheet .grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .hint { font-size: 12.5px; color: var(--muted); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip { font: 500 11.5px var(--mono); color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 14px; padding: 3px 9px; cursor: pointer; }
+.chip { display: inline-flex; align-items: center; gap: 6px; font: 500 11.5px var(--mono); color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 16px; padding: 3px 10px 3px 3px; cursor: pointer; }
+.chip .mark { width: 20px; height: 20px; }
 .chip.on { color: var(--ink); background: var(--gold); border-color: var(--gold); }
 
 #toasts { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; pointer-events: none; }

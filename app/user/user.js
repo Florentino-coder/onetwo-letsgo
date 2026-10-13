@@ -166,6 +166,25 @@ async function act(channel, payload, done) {
   }
 }
 
+// The banks whose mark is kept as a picture in banks/. Any other bank shows its first letter.
+const BANK_MARKS = new Set(['BAAC', 'BAY', 'BBL', 'CIMBT', 'CITI', 'GHB', 'GSB', 'HSBC', 'ISBT', 'ICBC', 'KBANK', 'KKP', 'KTB', 'LHBANK', 'SCB', 'TCRB', 'TISCO', 'TTB', 'UOBT']);
+
+/** A bank's mark, by its code: its picture, or a letter in a circle. */
+function bankMark(code, big) {
+  if (BANK_MARKS.has(code)) return h('img', { class: `mark ${big ? 'big' : ''}`, src: `banks/${code}.png`, alt: '' });
+  return h('span', { class: `mark letter ${big ? 'big' : ''}` }, (code || '?')[0]);
+}
+
+/** A state as a pill: 'ok' ready, 'run' at work, 'warn' passed over, 'bad' to be looked at, 'wait' idle. */
+const pill = (text, kind, title) => h('span', { class: `pill ${kind || 'wait'}`, title }, text);
+const rangeText = (min, max) => `${whole(min)}–${whole(max)}`;
+
+/** The amounts the queue shows: from the smallest set on any phone to the largest; null when none is set. */
+function shownRange() {
+  const ranged = S.state.devices.filter((device) => device.amountMin !== null);
+  return ranged.length ? [Math.min(...ranged.map((device) => device.amountMin)), Math.max(...ranged.map((device) => device.amountMax))] : null;
+}
+
 /**
  * The banks to tick, as the phones' app lists them. `chosen` is the codes ticked now; `changed`
  * is given the new list each time one is ticked or cleared.
@@ -173,7 +192,7 @@ async function act(channel, payload, done) {
 function bankChips(chosen, changed) {
   const now = new Set(chosen);
   return h('div', { class: 'chips' }, S.state.banks.map((bank) => {
-    const chip = h('button', { class: `chip ${now.has(bank.code) ? 'on' : ''}`, type: 'button', title: bank.name }, bank.code);
+    const chip = h('button', { class: `chip ${now.has(bank.code) ? 'on' : ''}`, type: 'button', title: bank.name }, bankMark(bank.code), bank.code);
     chip.addEventListener('click', () => {
       if (now.has(bank.code)) now.delete(bank.code);
       else now.add(bank.code);
@@ -199,7 +218,7 @@ function phoneView(device) {
   if (stop) word = ['หยุด', 'bad'];
   else if (!device.online) word = ['ออฟไลน์', 'wait'];
   else if (working) word = [PHONE_STATE[working.state] || 'กำลังทำงาน', 'run'];
-  else if (unset) word = ['ยังตั้งไม่ครบ', 'run'];
+  else if (unset) word = ['ยังตั้งไม่ครบ', 'warn'];
   else if ((jobs.checking || []).includes(device.serial)) word = ['กำลังตรวจสอบ', 'run'];
   else if (!device.payOn || (listed && listed.on === false)) word = ['ปิดอยู่', 'wait'];
   else if (jobs.accounts.fresh && !listed) word = ['ไม่พบบัญชีในหลังบ้าน', 'bad'];
@@ -297,7 +316,7 @@ function shell(content) {
         h('div', null, 'หลังบ้าน: ', signedOut() ? h('span', { class: 'bad' }, jobs.open ? 'ยังไม่ล็อกอิน' : 'ยังไม่เปิด') : h('span', { class: 'good' }, 'ล็อกอินอยู่')),
         days !== null && days <= 7 && h('div', { class: 'bad' }, `รหัสเปิดใช้เหลือ ${Math.max(0, days)} วัน`),
         h('div', null, `เวอร์ชัน ${version}`))),
-    h('div', { class: 'main' }, content));
+    h('div', { class: 'main' }, h('div', { class: 'wrap' }, content)));
 }
 
 /** What to do about a stop, in the order to do it. `serial` is '' when everything is stopped. */
@@ -311,9 +330,9 @@ function stopBlock(stop, serial) {
     h('div', { class: 'x' },
       h('b', null, `${device ? `${device.label}: ` : ''}${thai(stop.message)}`),
       h('div', null, `${about} · หยุดเมื่อ ${timeOf(stop.at)}`),
-      h('small', null, /is not the name of the job/.test(stop.message)
-        ? 'เงินยังไม่ออก โปรแกรมหยุดที่หน้ายืนยันและไม่ได้กดยืนยัน ตรวจชื่อและเลขบัญชีของรายการนี้ในหลังบ้าน ถ้าถูกต้อง โอนรายการนี้เองด้วยมือ โปรแกรมไม่จ่ายรายการนี้ซ้ำ เสร็จแล้วกด "จัดการแล้ว" จากนั้นจึงกดรีเซ็ต'
-        : 'เงินอาจออกแล้ว เปิดแอปธนาคารของเครื่องดูรายการล่าสุดก่อน ถ้าเงินออกแล้ว ปิดงานในหลังบ้านเอง ถ้าเงินยังไม่ออก โอนรายการนี้เองด้วยมือ โปรแกรมไม่จ่ายรายการนี้ซ้ำ เสร็จแล้วกด "จัดการแล้ว" จากนั้นจึงกดรีเซ็ต')),
+      h('ol', { class: 'todo' }, (/is not the name of the job/.test(stop.message)
+        ? ['เงินยังไม่ออก โปรแกรมหยุดที่หน้ายืนยันและไม่ได้กดยืนยัน', 'ตรวจชื่อและเลขบัญชีของรายการนี้ในหลังบ้าน ถ้าถูกต้อง โอนรายการนี้เองด้วยมือ โปรแกรมไม่จ่ายรายการนี้ซ้ำ', 'กด "จัดการแล้ว" จากนั้นจึงกดรีเซ็ต']
+        : ['เงินอาจออกแล้ว เปิดแอปธนาคารของเครื่องดูรายการล่าสุดก่อน', 'ถ้าเงินออกแล้ว ปิดงานในหลังบ้านเอง ถ้าเงินยังไม่ออก โอนรายการนี้เองด้วยมือ โปรแกรมไม่จ่ายรายการนี้ซ้ำ', 'กด "จัดการแล้ว" จากนั้นจึงกดรีเซ็ต']).map((step) => h('li', null, step)))),
     h('div', { class: 'acts' },
       open && h('button', { class: 'btn', onclick: () => act('jobs:resolve', { key: stop.key, note: 'ตรวจด้วยมือ' }, 'บันทึกว่าจัดการแล้ว') }, 'จัดการแล้ว'),
       h('button', { class: 'btn red', disabled: Boolean(open), title: open ? 'กด "จัดการแล้ว" ก่อน' : '', onclick: () => act('jobs:unhalt', { serial }, 'รีเซ็ตแล้ว') }, serial ? 'รีเซ็ตเครื่องนี้' : 'รีเซ็ต')));
@@ -333,25 +352,48 @@ function home() {
   const sub = jobs.halt ? `หยุดเมื่อ ${timeOf(jobs.halt.at)} · ไม่มีรายการใดถูกจ่ายต่อจนกว่าจะรีเซ็ต`
     : `${jobs.orders.at ? `ตรวจรายการล่าสุด ${timeOf(jobs.orders.at)}` : 'ยังไม่ได้ตรวจรายการ'} · ชุดงาน ${packName()}${jobs.payAuto ? '' : ' · จ่ายเองทีละรายการ'}`;
 
-  const phoneRow = (view) => h('button', { class: 'row phone', onclick: () => openPhone(view.device.serial) },
-    h('span', null, view.device.label),
-    h('span', { class: 'c' }, `${tail(view.device.pay.account)}${view.balance !== null ? ` · ${whole(view.balance)}` : ''}`, view.device.drops ? h('span', { class: view.device.drops >= 3 ? 'bad' : 'run', title: 'จำนวนครั้งที่เครื่องหลุดการเชื่อมต่อใน 1 ชั่วโมงที่ผ่านมา' }, ` · หลุด ${view.device.drops}`) : null,
-      view.device.skipBanks.length ? h('span', { class: 'run', title: `เครื่องนี้ข้าม: ${view.device.skipBanks.join(', ')}` }, ` · ข้าม ${view.device.skipBanks.length}`) : null),
-    h('span', { class: `st ${view.word[1]}` }, view.word[0]));
+  const shown = shownRange();
+  const phoneRow = (view) => {
+    const { device } = view;
+    const extra = [device.skipBanks.length ? `ข้าม ${device.skipBanks.join(', ')}` : '', device.drops ? `หลุด ${device.drops} ครั้ง` : ''].filter(Boolean).join(' · ');
+    return h('button', { class: 'row phone', onclick: () => openPhone(device.serial) },
+      h('span', { class: 'top' }, h('span', { class: 'nm' }, device.label), pill(view.word[0], view.word[1])),
+      h('span', { class: 'c' }, [tail(device.pay.account), view.balance !== null ? `คงเหลือ ${whole(view.balance)}` : '', device.amountMin !== null ? `ยอด ${rangeText(device.amountMin, device.amountMax)}` : ''].filter(Boolean).join(' · ')),
+      extra ? h('span', { class: `c ${device.drops >= 3 ? 'bad' : 'warn'}`, title: 'ธนาคารที่เครื่องนี้ข้าม และจำนวนครั้งที่เครื่องหลุดการเชื่อมต่อใน 1 ชั่วโมงที่ผ่านมา' }, extra) : null);
+  };
 
+  // Why no phone takes a row: a few words for the pill, the whole of it for the pointer.
+  const WHY = {
+    cap: ['ถึงเพดาน', 'wait', 'เครื่องที่รับยอดนี้ถึงเพดานต่อวันแล้ว'], balance: ['เงินไม่พอ', 'wait', 'เงินในเครื่องที่รับยอดนี้ไม่พอ'],
+    off: ['บัญชีปิดอยู่', 'wait', 'บัญชีของเครื่องที่รับยอดนี้ปิดอยู่'], stopped: ['เครื่องหยุด', 'bad', 'เครื่องที่รับยอดนี้หยุดอยู่ รอตรวจและรีเซ็ต'],
+    checking: ['กำลังตรวจสอบ', 'run', 'เครื่องที่รับยอดนี้เพิ่งเสียบสาย กำลังตรวจสอบ'], missing: ['ไม่พบบัญชี', 'bad', 'ไม่พบบัญชีของเครื่องในหลังบ้าน'],
+    skipbank: ['ข้ามธนาคาร', 'warn', 'ธนาคารนี้ถูกตั้งให้ข้ามอยู่'], nobank: ['ไม่รองรับ', 'warn', 'ธนาคารนี้ไม่อยู่ในรายการของแอปธนาคาร'],
+  };
   const orderRow = (order) => {
     const onPhone = Object.entries(jobs.paying).find(([, each]) => each.key === order.key);
     const worker = onPhone && devices.find((device) => device.serial === onPhone[0]);
+    const cell = (top, under) => h('span', { class: 'do' }, top, under ? h('small', null, under) : null);
     let status;
-    if (onPhone) status = h('span', { class: 'st run' }, `${worker ? worker.label : ''} · ${PHONE_STATE[onPhone[1].state] || 'กำลังทำงาน'}`);
-    else if (order.state) status = h('span', { class: `st ${ROW_STATE[order.state] ? ROW_STATE[order.state][1] : 'wait'}` }, ROW_STATE[order.state] ? ROW_STATE[order.state][0] : order.state);
-    else if (!order.serial) status = h('span', { class: 'st wait' }, { cap: 'เครื่องถึงเพดาน', balance: 'เงินในเครื่องไม่พอ', off: 'บัญชีเครื่องปิดอยู่', stopped: 'เครื่องหยุดอยู่', checking: 'กำลังตรวจสอบเครื่อง', missing: 'ไม่พบบัญชีเครื่องในหลังบ้าน', skipbank: 'ข้ามธนาคารนี้', nobank: 'ธนาคารนี้ไม่รองรับ' }[order.short] || (devices.some((device) => device.online && !device.payOn && device.amountMin !== null && Number(order.amount) >= device.amountMin && Number(order.amount) <= device.amountMax) ? 'บัญชีเครื่องปิดอยู่' : 'ไม่มีเครื่องรับยอดนี้'));
-    else if (jobs.payAuto) status = h('span', { class: 'st wait' }, `รอ · ${order.phone}`);
-    else status = h('span', { class: 'st' }, h('button', { class: 'btn small gold', disabled: Boolean(jobs.halt) || out, onclick: () => act('jobs:pay', { key: order.key }) }, `จ่าย · ${order.phone}`));
-    return h('div', { class: 'row order' }, h('span', { class: 'a' }, money(order.amount)),
-      h('span', { class: 'who', title: `${order.holder || ''} · ${order.bank}` }, h('span', null, order.holder || '—'), h('small', null, order.bank)),
-      h('span', { class: 'acct' }, order.account), status);
+    if (onPhone) status = cell(pill(PHONE_STATE[onPhone[1].state] || 'กำลังทำงาน', 'run'), worker ? worker.label : '');
+    else if (order.state) status = cell(pill(ROW_STATE[order.state] ? ROW_STATE[order.state][0] : order.state, ROW_STATE[order.state] ? ROW_STATE[order.state][1] : 'wait'));
+    else if (!order.serial) {
+      const off = devices.some((device) => device.online && !device.payOn && device.amountMin !== null && Number(order.amount) >= device.amountMin && Number(order.amount) <= device.amountMax);
+      const why = WHY[order.short] || (off ? WHY.off : ['ไม่มีเครื่องรับ', 'wait', 'ไม่มีเครื่องออนไลน์ที่ช่วงยอดครอบคลุมรายการนี้']);
+      status = cell(pill(why[0], why[1], why[2]));
+    } else if (jobs.payAuto) status = cell(pill('รอ', 'wait'), order.phone);
+    else status = cell(h('button', { class: 'btn small gold', disabled: Boolean(jobs.halt) || out, onclick: () => act('jobs:pay', { key: order.key }) }, 'จ่าย'), order.phone);
+    return h('div', { class: 'row order' }, h('span', { class: 'a' }, money(order.amount)), bankMark(order.bankCode),
+      h('span', { class: 'who', title: `${order.holder || ''} · ${order.bank}` }, h('span', null, order.holder || '—'), h('small', null, `${order.bankCode || order.bank} · `, h('span', { class: 'acct' }, order.account))),
+      status);
   };
+
+  const ownSkips = devices.filter((device) => device.skipBanks.length);
+  const tags = h('div', { class: 'tags' },
+    jobs.skipBanks.length ? h('span', { class: 'pill warn', title: 'รายการไปธนาคารนี้ไม่ถูกจ่าย เอาออกได้ที่หน้าตั้งค่า' }, 'ข้ามธนาคารทุกเครื่อง:', jobs.skipBanks.map((code) => bankMark(code)), jobs.skipBanks.join(', ')) : null,
+    ownSkips.map((device) => pill(`${device.label} ข้าม ${device.skipBanks.join(', ')}`, 'warn', 'ตั้งในหน้าต่างของเครื่อง')),
+    pill(`เช็กชื่อผู้รับ: ${jobs.config.checkName === false ? 'ปิด' : 'เปิด'}`, jobs.config.checkName === false ? 'wait' : 'run', 'เปิดหรือปิดได้ที่หน้าตั้งค่า'),
+    shown ? pill(`คิวแสดงยอด ${rangeText(shown[0], shown[1])}`, 'wait', 'จากยอดต่ำสุดถึงยอดสูงสุดที่ตั้งไว้ของทุกเครื่อง') : null);
+  const emptyQueue = out ? 'ใส่พาสเพื่อดูรายการ' : jobs.orders.error ? 'อ่านรายการจากหลังบ้านไม่ได้ โปรแกรมลองใหม่เอง' : shown ? `ไม่มีรายการในช่วงยอด ${rangeText(shown[0], shown[1])}` : 'ไม่มีรายการรอจ่าย';
 
   return shell([
     h('div', { class: 'mh' },
@@ -368,7 +410,7 @@ function home() {
         h('button', { class: 'btn', onclick: () => act('pack:import', {}, 'นำเข้าชุดงานแล้ว') }, 'นำเข้าจากไฟล์'),
         h('button', { class: 'btn gold', onclick: async () => { const result = await ask('update:check'); if (result) S.state.update = result; const state = await ask('state:get'); if (state) S.state = state; toast(S.state.user.pack.current ? 'ได้รับชุดงานแล้ว' : 'ยังไม่มีชุดงานจากผู้พัฒนา', S.state.user.pack.current ? 'good' : 'bad'); render(true); } }, 'ตรวจหาชุดงาน'))),
     !noPack && !jobs.halt && !out && !firstDone && h('div', { class: 'note' }, h('span', null, h('b', null, 'ลองหนึ่งรายการก่อน. '), 'ตั้งเครื่องให้ครบ แล้วกด "จ่าย" ที่รายการในคิวหนึ่งรายการ ดูให้จบจนขึ้น "ปิดงานแล้ว" จากนั้นจึงเปิดจ่ายอัตโนมัติได้')),
-    jobs.skipBanks.length ? h('div', { class: 'note' }, h('span', null, h('b', null, `ข้ามธนาคารอยู่: ${jobs.skipBanks.join(', ')}. `), 'รายการไปธนาคารนี้ไม่ถูกจ่าย เอาออกได้ที่หน้าตั้งค่า')) : null,
+    tags,
     h('div', { class: 'kpis' },
       h('div', { class: 'kpi' }, h('div', { class: 'l' }, 'จ่ายวันนี้'), h('div', { class: 'v gold' }, money(Object.values(jobs.spent).reduce((sum, value) => sum + value, 0)))),
       h('div', { class: 'kpi' }, h('div', { class: 'l' }, 'สำเร็จ'), h('div', { class: 'v' }, today.filter((entry) => entry.state === 'done').length)),
@@ -380,8 +422,8 @@ function home() {
         h('div', { class: 'list' }, phones.length ? phones.map(phoneRow) : h('div', { class: 'empty' }, S.state.tools.adb ? 'ยังไม่พบเครื่อง เสียบสาย USB และเปิดการแก้ไขข้อบกพร่อง USB ที่มือถือ' : 'ไม่พบตัวเชื่อมต่อมือถือ (ADB) ในคอมเครื่องนี้ ติดตั้งโปรแกรมใหม่ หรือแจ้งผู้พัฒนา'))),
       h('div', { class: 'pane' },
         h('div', { class: 'h' }, 'คิว', h('b', null, 'เรียงตามที่หลังบ้านแสดง')),
-        orders.length ? h('div', { class: 'row order head' }, h('span', { class: 'a' }, 'ยอด (บาท)'), h('span', null, 'ชื่อบัญชี / ธนาคาร'), h('span', null, 'เลขบัญชี'), h('span', { class: 'st' }, 'สถานะ')) : null,
-        h('div', { class: 'list' }, orders.length ? orders.map(orderRow) : h('div', { class: 'empty' }, out ? 'ล็อกอินหลังบ้านเพื่อดูรายการ' : 'ไม่มีรายการในช่วงยอดของเครื่อง')))),
+        orders.length ? h('div', { class: 'row order head' }, h('span', { class: 'a' }, 'ยอด (บาท)'), h('span'), h('span', null, 'ชื่อบัญชี · ธนาคาร · เลขบัญชี'), h('span', { class: 'st' }, 'สถานะ')) : null,
+        h('div', { class: 'list' }, orders.length ? orders.map(orderRow) : h('div', { class: 'empty' }, emptyQueue)))),
   ]);
 }
 
@@ -391,14 +433,18 @@ function historyRow(entry) {
   const label = (serial) => (devices.find((device) => device.serial === serial) || { label: serial || '—' }).label;
   const state = ROW_STATE[entry.state] || [entry.state, 'wait'];
   const open = entry.state === 'started' || entry.state === 'paid' || entry.state === 'name';
+  // What the bank app showed where the names could not be compared.
+  const shown = entry.state === 'name' ? (/screen "([^"]*)"/.exec(entry.detail || '') || [])[1] : '';
   return h('div', { class: 'row past' },
     h('span', { class: 'c' }, `${dayOf(entry.at)} ${timeOf(entry.at).slice(0, 5)}`),
     h('span', { class: 'a' }, money(entry.amount)),
-    h('span', { class: 'who', title: `${entry.holder || ''} · ${entry.bank}` }, h('span', null, entry.holder || '—'), h('small', null, entry.bank)),
-    h('span', { class: 'acct' }, entry.account),
-    h('span', { class: 'b' }, entry.phone || label(entry.serial)),
-    h('span', null, entry.slip ? h('button', { class: 'lk', onclick: () => openSlip(entry) }, 'ดูสลิป') : h('span', { class: 'wait' }, '—')),
-    h('span', { class: `st ${state[1]}` }, open ? h('button', { class: 'lk', onclick: () => act('jobs:resolve', { key: entry.key, note: 'ตรวจด้วยมือ' }, 'บันทึกว่าจัดการแล้ว') }, `${state[0]} · จัดการแล้ว`) : state[0]));
+    bankMark(entry.bankCode),
+    h('span', { class: 'who', title: `${entry.holder || ''} · ${entry.bank}` }, h('span', null, entry.holder || '—'),
+      h('small', null, `${entry.bankCode || entry.bank} · `, h('span', { class: 'acct' }, entry.account), ` · ${entry.phone || label(entry.serial)}`,
+        shown ? ` · แอปแสดง "${shown === 'no name' ? 'ไม่มีชื่อ' : shown}"` : '',
+        entry.slip ? [' · ', h('button', { class: 'lk', onclick: () => openSlip(entry) }, 'ดูสลิป')] : null)),
+    h('span', { class: 'do' }, pill(state[0], state[1]),
+      open ? h('button', { class: 'lk', onclick: () => act('jobs:resolve', { key: entry.key, note: 'ตรวจด้วยมือ' }, 'บันทึกว่าจัดการแล้ว') }, 'จัดการแล้ว') : null));
 }
 
 const searching = () => Boolean(S.find.text || S.find.state || S.find.day);
@@ -424,8 +470,17 @@ function runFind() {
 
 function history() {
   const states = [['', 'ทุกสถานะ'], ['done', 'ปิดงานแล้ว'], ['paid', 'จ่ายแล้ว รอปิดงาน'], ['started', 'ค้าง ต้องตรวจ'], ['failed', 'ไม่สำเร็จ'], ['name', 'ชื่อไม่ตรง'], ['resolved', 'จัดการแล้ว']];
+  const today = S.state.jobs.history.filter((entry) => isToday(entry.at));
+  // Today's rows of one state, counted and added up. Pressing it shows those rows.
+  const tile = (name, state, bad) => {
+    const rows = today.filter((entry) => entry.state === state);
+    return h('button', { class: 'kpi', title: 'กดเพื่อดูเฉพาะรายการนี้', onclick: () => { $('find-state').value = state; runFind(); } },
+      h('div', { class: 'l' }, `${name} วันนี้`),
+      h('div', { class: `v ${bad && rows.length ? 'bad' : ''}` }, `${rows.length} · ${whole(rows.reduce((sum, entry) => sum + Number(entry.amount), 0))}`));
+  };
   const page = shell([
     h('div', { class: 'mh' }, h('div', null, h('div', { class: 't' }, 'ประวัติ'), h('div', { class: 's' }, 'ทุกรายการที่โปรแกรมเริ่มจ่าย ใหม่สุดอยู่บน เก็บในเครื่องนี้เท่านั้น'))),
+    h('div', { class: 'kpis' }, tile('ปิดงานแล้ว', 'done'), tile('ค้าง ต้องตรวจ', 'started', true), tile('ชื่อไม่ตรง', 'name', true), tile('จัดการแล้ว', 'resolved')),
     h('div', { class: 'finder' },
       h('input', { class: 'inp plain', id: 'find-text', value: S.find.text, placeholder: 'ค้นหา เลขบัญชี ชื่อบัญชี ธนาคาร หรือยอด', spellcheck: 'false', oninput: runFind }),
       h('select', { class: 'inp plain', id: 'find-state', onchange: runFind }, states.map(([value, name]) => h('option', { value, selected: value === S.find.state }, name))),
@@ -433,8 +488,8 @@ function history() {
       h('button', { class: 'lk', onclick: () => { S.find = { text: '', state: '', day: '' }; S.found = null; render(true); } }, 'ล้าง'),
       h('span', { class: 'sp' }),
       h('span', { class: 'hint', id: 'history-count' })),
-    h('div', { class: 'pane' },
-      h('div', { class: 'row past head' }, ['เวลา', 'ยอด (บาท)', 'ชื่อบัญชี / ธนาคาร', 'เลขบัญชี', 'เครื่องที่จ่าย', 'สลิป', 'สถานะ'].map((name, index) => h('span', { class: index === 1 ? 'a' : index === 6 ? 'st' : '' }, name))),
+    h('div', { class: 'pane grow' },
+      h('div', { class: 'row past head' }, h('span', null, 'เวลา'), h('span', { class: 'a' }, 'ยอด (บาท)'), h('span'), h('span', null, 'ชื่อบัญชี · ธนาคาร · เลขบัญชี · เครื่องที่จ่าย'), h('span', { class: 'st' }, 'สถานะ')),
       h('div', { class: 'list', id: 'history-list' })),
   ]);
   // The list is filled once the page is in the window: it is found by its id.
@@ -458,6 +513,9 @@ function settings() {
   const { license, pack } = user;
   const updateWord = { current: ['เป็นเวอร์ชันล่าสุด', 'ok'], updated: [`รุ่น ${update.version} พร้อมแล้ว`, 'run'], error: ['ตรวจไม่ได้ ลองใหม่ภายหลัง', 'bad'], disabled: ['ยังไม่ได้ตั้งช่องอัปเดต', 'wait'] }[update.status] || ['ยังไม่ได้ตรวจ', 'wait'];
   const line = (key, value, ...rest) => h('div', { class: 'line' }, h('span', { class: 'k' }, key), value, rest);
+  // A switch with what it does when on, in one line under its name.
+  const option = (name, about, on, press, disabled) => h('div', { class: 'opt' }, h('span', { class: 'x' }, h('span', null, name), h('small', null, about)),
+    h('button', { class: `sw ${on ? 'on' : ''}`, disabled, 'aria-label': name, onclick: press }, h('i')));
   return shell([
     h('div', { class: 'mh' }, h('div', null, h('div', { class: 't' }, 'ตั้งค่า'))),
     h('div', { class: 'two' },
@@ -472,12 +530,14 @@ function settings() {
         pack.previous && line('รุ่นก่อน', h('span', { class: 'v' }, `${pack.previous.name} ${pack.previous.version}`), h('button', { class: 'lk', onclick: () => act('pack:rollback', {}, 'ย้อนกลับไปชุดงานรุ่นก่อนแล้ว') }, 'ย้อนกลับไปรุ่นนี้')),
         pack.current && pack.current.phone.model && line('ทดสอบกับ', h('span', { class: 'v plain' }, `${pack.current.phone.model}${pack.current.phone.width ? ` · ${pack.current.phone.width}×${pack.current.phone.height}` : ''}`)),
         h('div', { class: 'h gap' }, 'การจ่าย'),
-        line('ช่วงยอดหน้าเว็บ', h('span', { class: 'v plain' }, 'ให้หลังบ้านแสดงเฉพาะยอดของเครื่อง'), h('button', { class: `sw ${jobs.config.filter ? 'on' : ''}`, onclick: () => act('jobs:set', { filter: !jobs.config.filter }) }, h('i'))),
-        line('เช็กชื่อผู้รับ', h('span', { class: 'v plain' }, 'ชื่อบนหน้ายืนยันต้องตรงกับรายการ จึงกดยืนยัน'), h('button', { class: `sw ${jobs.config.checkName !== false ? 'on' : ''}`, onclick: () => act('jobs:set', { checkName: jobs.config.checkName === false }) }, h('i'))),
-        line('ต้องมีนามสกุล', h('span', { class: 'v plain' }, 'แอปแสดงนามสกุล แต่รายการไม่มี ให้ข้ามรายการ'), h('button', { class: `sw ${jobs.config.checkFamily ? 'on' : ''}`, disabled: jobs.config.checkName === false, onclick: () => act('jobs:set', { checkFamily: !jobs.config.checkFamily }) }, h('i'))),
-        h('div', { class: 'h gap' }, 'ธนาคารที่ข้าม (ทุกเครื่อง)'),
+        option('เช็กชื่อผู้รับ', 'ชื่อบนหน้ายืนยันต้องตรงกับรายการ จึงกดยืนยัน', jobs.config.checkName !== false, () => act('jobs:set', { checkName: jobs.config.checkName === false })),
+        option('ต้องมีนามสกุล', 'แอปแสดงนามสกุล แต่รายการไม่มี ให้ข้ามรายการ', Boolean(jobs.config.checkFamily), () => act('jobs:set', { checkFamily: !jobs.config.checkFamily }), jobs.config.checkName === false),
+        option('ช่วงยอดหน้าเว็บ', 'ให้หลังบ้านส่งเฉพาะยอดในช่วงของเครื่อง', Boolean(jobs.config.filter), () => act('jobs:set', { filter: !jobs.config.filter })),
+        h('div', { class: 'h gap' }, 'ธนาคารที่ข้าม ทุกเครื่อง'),
         bankChips(jobs.skipBanks, (codes) => act('banks:skip', { codes })),
-        h('div', { class: 'hint pad' }, 'กดเลือกธนาคารที่โอนไม่ได้ชั่วคราว รายการไปธนาคารนั้นจะรออยู่ในคิว เครื่องจ่ายรายการอื่นต่อ กดอีกครั้งเพื่อเอาออก ตั้งแยกรายเครื่องได้ในหน้าต่างของเครื่อง')),
+        h('div', { class: 'hint pad' }, jobs.skipBanks.length
+          ? `ข้ามอยู่ ${jobs.skipBanks.length} ธนาคาร รายการไปธนาคารนี้รออยู่ในคิว เครื่องจ่ายรายการอื่นต่อ กดอีกครั้งเพื่อเอาออก`
+          : 'กดเลือกธนาคารที่โอนไม่ได้ชั่วคราว รายการไปธนาคารนั้นจะรออยู่ในคิว เครื่องจ่ายรายการอื่นต่อ ตั้งแยกรายเครื่องได้ในหน้าต่างของเครื่อง')),
       h('div', { class: 'pane' },
         h('div', { class: 'h' }, 'เกี่ยวกับ'),
         h('div', { class: 'big' }, 'OneTwo ', h('span', null, 'ADB')),
@@ -564,9 +624,14 @@ function openPhone(serial) {
   };
   let skip = device.skipBanks;
   const speed = SPEEDS.reduce((best, each) => (Math.abs(each[0] - device.pay.scale) < Math.abs(best[0] - device.pay.scale) ? each : best))[0];
+  const { jobs } = S.state;
+  const listed = jobs.accounts.fresh && device.pay.account ? jobs.accounts.map[device.pay.account] || null : null;
   $('modal').replaceChildren(h('div', { class: 'veil', onmousedown: (event) => { if (event.target === event.currentTarget) close(); } },
-    h('div', { class: 'sheet' },
-      h('div', { class: 'acts' }, h('div', { class: 't' }, device.label), h('span', { class: `st ${view.word[1]}` }, view.word[0]), h('span', { class: 'sp' }),
+    h('div', { class: 'sheet fixed' },
+      h('div', { class: 'sheet-head' }, bankMark('BBL', true),
+        h('div', { class: 'x' }, h('div', { class: 't' }, device.label),
+          h('div', { class: 'hint' }, [device.model, device.serial, device.online ? 'ต่ออยู่' : 'ออฟไลน์', view.spent ? `จ่ายวันนี้ ${money(view.spent)}` : ''].filter(Boolean).join(' · '))),
+        pill(view.word[0], view.word[1]),
         h('button', { class: `sw ${device.payOn ? 'on' : ''}`, disabled: view.word[0] === 'กำลังตรวจสอบ', title: 'สถานะนี้คือสถานะของบัญชีในหน้ารายการปรับยอดถอน กดแล้วโปรแกรมเปิดหรือปิดบัญชีที่หลังบ้านให้', onclick: async () => {
           const data = await ask('device:pay', { serial, on: !device.payOn });
           if (data === null) return;
@@ -574,23 +639,29 @@ function openPhone(serial) {
           toast(device.payOn ? 'ปิดสถานะแล้ว' : 'เปิดสถานะแล้ว', 'good');
           openPhone(serial);
         } }, h('i'), device.payOn ? 'สถานะ: เปิด' : 'สถานะ: ปิด')),
-      h('div', { class: 'hint' }, `${device.model || ''} · ${device.serial} · ${device.online ? 'ต่ออยู่' : 'ออฟไลน์'}${view.spent ? ` · จ่ายวันนี้ ${money(view.spent)}` : ''}`),
-      h('div', { class: 'grid' },
-        field('ชื่อเครื่อง', h('input', { class: 'inp plain', id: 'phone-name', value: device.name, placeholder: device.model || '' })),
-        field(device.hasPin ? 'PIN แอปธนาคาร (ตั้งแล้ว ใส่เมื่อจะเปลี่ยน)' : 'PIN แอปธนาคาร', h('div', { class: 'peek' },
-          h('input', { class: 'inp', id: 'phone-pin', type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: device.hasPin ? '••••••' : '' }),
-          eyeButton('phone-pin', device.hasPin ? serial : ''))),
-        field(`เลขบัญชี ${BANK} ของเครื่อง`, h('input', { class: 'inp', id: 'phone-account', value: device.pay.account, inputmode: 'numeric' })),
-        field('ชื่อบัญชี', h('input', { class: 'inp plain', id: 'phone-holder', value: device.pay.holder })),
-        field('ยอดต่ำสุดที่เครื่องนี้จ่าย', h('input', { class: 'inp', id: 'phone-min', type: 'number', min: 1, value: device.amountMin ?? '' })),
-        field('ยอดสูงสุดที่เครื่องนี้จ่าย', h('input', { class: 'inp', id: 'phone-max', type: 'number', min: 1, value: device.amountMax ?? '' })),
-        field('เพดานต่อวัน (เว้นว่าง = ไม่จำกัด)', h('input', { class: 'inp', id: 'phone-cap', type: 'number', min: 0, value: device.pay.cap ?? '' })),
-        field('ยอดคงเหลือในบัญชี (ใส่เองเมื่อหลังบ้านไม่แสดง)', h('input', { class: 'inp', id: 'phone-balance', type: 'number', min: 0, value: device.pay.balance ?? '' })),
-        field('ความเร็วของเครื่องนี้', h('select', { class: 'inp plain', id: 'phone-speed' }, SPEEDS.map(([scale, name]) => h('option', { value: scale, selected: scale === speed }, name))), true),
-        field('ธนาคารที่เครื่องนี้ข้าม (กดเลือก แล้วกดบันทึก)', bankChips(skip, (codes) => { skip = codes; }), true)),
-      h('div', { class: 'hint' }, 'เริ่มที่ "ปกติ" ก่อน เร่งทีละขั้นเมื่อจ่ายได้นิ่งแล้ว ถ้าเครื่องแตะพลาดหรือหน้าจอโหลดไม่ทัน ให้ลดความเร็วลง'),
-      view.stop && h('div', { class: 'badline' }, `เครื่องนี้หยุดอยู่: ${thai(view.stop.message)}`),
-      h('div', { class: 'acts' }, h('button', { class: 'btn', onclick: close }, 'ปิด'), h('button', { class: 'btn gold', onclick: save }, 'บันทึก')))));
+      h('div', { class: 'sheet-body' },
+        h('div', { class: 'h' }, 'บัญชี'),
+        h('div', { class: 'grid' },
+          field('ชื่อเครื่อง', h('input', { class: 'inp plain', id: 'phone-name', value: device.name, placeholder: device.model || '' })),
+          field(device.hasPin ? 'PIN แอปธนาคาร (ตั้งแล้ว ใส่เมื่อจะเปลี่ยน)' : 'PIN แอปธนาคาร', h('div', { class: 'peek' },
+            h('input', { class: 'inp', id: 'phone-pin', type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: device.hasPin ? '••••••' : '' }),
+            eyeButton('phone-pin', device.hasPin ? serial : ''))),
+          field(`เลขบัญชี ${BANK} ของเครื่อง`, h('input', { class: 'inp', id: 'phone-account', value: device.pay.account, inputmode: 'numeric' })),
+          field('ชื่อบัญชี', h('input', { class: 'inp plain', id: 'phone-holder', value: device.pay.holder }))),
+        h('div', { class: 'hint' }, listed && listed.balance !== null ? `หลังบ้าน: คงเหลือ ${money(listed.balance)} · อ่านเมื่อ ${timeOf(jobs.accounts.at)}` : 'หลังบ้านยังไม่แสดงยอดของบัญชีนี้ โปรแกรมใช้ยอดที่ใส่เองด้านล่าง'),
+        h('div', { class: 'h gap' }, 'ช่วงยอดและเพดาน'),
+        h('div', { class: 'grid four' },
+          field('ยอดต่ำสุด', h('input', { class: 'inp', id: 'phone-min', type: 'number', min: 1, value: device.amountMin ?? '' })),
+          field('ยอดสูงสุด', h('input', { class: 'inp', id: 'phone-max', type: 'number', min: 1, value: device.amountMax ?? '' })),
+          field('เพดานต่อวัน', h('input', { class: 'inp', id: 'phone-cap', type: 'number', min: 0, placeholder: 'ไม่จำกัด', value: device.pay.cap ?? '' })),
+          field('ยอดคงเหลือ (ใส่เอง)', h('input', { class: 'inp', id: 'phone-balance', type: 'number', min: 0, placeholder: 'ใช้ของหลังบ้าน', value: device.pay.balance ?? '' }))),
+        field('ความเร็วของเครื่องนี้', h('select', { class: 'inp plain', id: 'phone-speed' }, SPEEDS.map(([scale, name]) => h('option', { value: scale, selected: scale === speed }, name)))),
+        h('div', { class: 'hint' }, 'เริ่มที่ "ปกติ" ก่อน เร่งทีละขั้นเมื่อจ่ายได้นิ่งแล้ว ถ้าเครื่องแตะพลาดหรือหน้าจอโหลดไม่ทัน ให้ลดความเร็วลง'),
+        h('div', { class: 'h gap' }, 'ธนาคารที่เครื่องนี้ข้าม'),
+        bankChips(skip, (codes) => { skip = codes; }),
+        h('div', { class: 'hint' }, 'กดเลือก แล้วกดบันทึก รายการไปธนาคารที่เลือกจะไปเครื่องอื่นที่รับยอดนั้น หรือรออยู่ในคิว'),
+        view.stop && h('div', { class: 'badline' }, `เครื่องนี้หยุดอยู่: ${thai(view.stop.message)}`)),
+      h('div', { class: 'sheet-foot' }, h('button', { class: 'btn', onclick: close }, 'ปิด'), h('button', { class: 'btn gold', onclick: save }, 'บันทึก')))));
 }
 
 // ── drawing ──────────────────────────────────────────────────────────────

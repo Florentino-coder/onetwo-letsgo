@@ -621,7 +621,7 @@ function createJobs(host) {
       spent: Object.fromEntries([...new Set(Object.values(ledger).map((entry) => entry.serial).filter(Boolean))].map((serial) => [serial, spentToday(serial)])),
       audits: audits.slice(-80).reverse().map((entry) => ({ at: entry.at, event: entry.event, key: entry.key, serial: entry.serial || '', message: entry.message || entry.was || (entry.wrong && entry.wrong.length ? entry.wrong.join(', ') : '') || (entry.file ? `สลิป ${path.basename(entry.file)}` : '') })),
       // Every row the app ever began, newest first.
-      history: Object.entries(ledger).map(([key, entry]) => ({ key, ...entry, slip: slipOf(entry) })).sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 200),
+      history: Object.entries(ledger).map(([key, entry]) => ({ key, ...entry, slip: slipOf(entry), bankCode: logic.bankCode(entry.bank) })).sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 200),
     };
   }
 
@@ -1683,7 +1683,7 @@ function createJobs(host) {
         const phone = phoneFor(order);
         const entry = ledger[order.key];
         // Say why no phone takes a row whose amount is in a phone's range.
-        return { ...order, state: entry ? entry.state : '', detail: entry ? entry.detail || '' : '', serial: phone ? phone.serial : '', phone: phone ? phone.label : '', short: phone ? '' : whyNot(order) };
+        return { ...order, state: entry ? entry.state : '', detail: entry ? entry.detail || '' : '', serial: phone ? phone.serial : '', phone: phone ? phone.label : '', short: phone ? '' : whyNot(order), bankCode: logic.bankCode(order.bank) };
       }),
     };
   }
@@ -2026,7 +2026,7 @@ function createJobs(host) {
       .filter(([, entry]) => (!state || entry.state === state) && (!day || local(entry.at) === day))
       .filter(([, entry]) => !wanted || [entry.holder, entry.bank, entry.phone].some((field) => String(field || '').toLowerCase().includes(wanted))
         || (digits && [entry.account, String(entry.amount).replace(/,/g, '')].some((field) => String(field || '').includes(digits))))
-      .map(([key, entry]) => ({ key, ...entry, slip: slipOf(entry) }))
+      .map(([key, entry]) => ({ key, ...entry, slip: slipOf(entry), bankCode: logic.bankCode(entry.bank) }))
       .sort((a, b) => String(b.at).localeCompare(String(a.at)))
       .slice(0, 500);
   }
