@@ -367,6 +367,19 @@ function parseImageList(output, since = 0) {
   return images.sort((a, b) => b.at - a.at);
 }
 
+/**
+ * The rows of the phone's own picture index, as "content query" prints them, turned into the
+ * "time|path" lines parseImageList reads. Only the gallery folders count, as when they are walked.
+ */
+function mediaRowsToList(output) {
+  const lines = [];
+  for (const row of String(output).split(/\r?\n/)) {
+    const match = row.match(/date_modified=(\d+), _data=(\/.+?)\s*$/);
+    if (match && /^\/(?:sdcard|storage\/emulated\/\d+)\/(?:DCIM|Pictures|Download)\//.test(match[2])) lines.push(`${match[1]}|${match[2]}`);
+  }
+  return lines.join('\n');
+}
+
 // What a bank prints over hidden digits, and what text recognition makes of it: it reads "xxx" as "%%%" at times.
 const MASK = 'xX*•●×%';
 const MIN_MASKED_LENGTH = 6;
@@ -447,8 +460,10 @@ const SLIP_ACCOUNT_RES = [
   // 5840xxx518: two or more mask marks in a row, so a reference with one X in it is not taken.
   new RegExp(`[0-9]*[${SLIP_MASK}]{2,}[${SLIP_MASK}0-9]*`),
 ];
-// The reader takes the comma of 1,000.00 for a dot now and then, so 1.000.00 is the same amount.
-const SLIP_AMOUNT_RE = /\d{1,3}(?:[,.]\d{3})+\.\d{2}|\d+\.\d{2}/;
+// The reader takes the comma of 1,000.00 for a dot now and then, or reads a dot after it, so
+// 1.000.00 and 1,.000.00 are the same amount. A figure is taken whole or not at all: the end of a
+// longer figure, such as the 600.00 of 1,.600.00, is never an amount by itself.
+const SLIP_AMOUNT_RE = /(?<![\d,.])(?:\d{1,3}(?:[,.]{1,2}\d{3})+\.\d{2}|\d+\.\d{2})/;
 const SLIP_FEE_RE = /ค่าธรรมเนียม|fee/i;
 const SLIP_REFERENCE_RE = /อ้างอิง|เลขที่รายการ|reference|\bref\b/i;
 
@@ -1002,6 +1017,7 @@ module.exports = {
   wholeNumber,
   parseUiText,
   parseImageList,
+  mediaRowsToList,
   screenShows,
   verifyScreen,
   parseSlip,

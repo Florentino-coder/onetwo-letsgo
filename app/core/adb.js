@@ -8,12 +8,16 @@ const DEFAULT_TIMEOUT_MS = 12000;
 // the last one read, for no longer than the second figure.
 const SCREEN_SIZE_FRESH_MS = 20000;
 const SCREEN_SIZE_KEPT_MS = 600000;
+// How long the gallery folders of a phone may take to walk before its own picture index is asked instead.
+const GALLERY_FIND_MS = 10000;
 
 class AdbError extends Error {}
 
 class AdbClient {
   constructor(adbPath) {
     this.adbPath = adbPath;
+    // The phones whose gallery folders took too long to walk, by serial.
+    this.slowGallery = new Set();
   }
 
   /** Resolves with { code, stdout: Buffer, stderr: string }. Rejects only when adb cannot run or times out. */
@@ -201,11 +205,23 @@ class AdbClient {
   /** Pictures in the gallery folders changed at or after `since` (phone clock), newest first. */
   async newImages(serial, since) {
     const minutes = Math.max(1, Math.ceil(((await this.clock(serial)) - since) / 60) + 1);
-    const command = `find /sdcard/DCIM /sdcard/Pictures /sdcard/Download -type f -mmin -${minutes} `
+    // Hidden folders, such as the gallery's thumbnails, hold no slip and can hold very many files.
+    const command = `find /sdcard/DCIM /sdcard/Pictures /sdcard/Download -name '.*' -prune -o -type f -mmin -${minutes} `
       + "\\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \\) -exec stat -c '%Y|%n' {} + 2>/dev/null";
-    // find reports a missing folder through its exit code; the pictures it did find still count.
-    const result = await this.run(['shell', command], { serial, timeout: 20000 });
-    return logic.parseImageList(result.stdout.toString('utf8'), since);
+    if (!this.slowGallery.has(serial)) {
+      try {
+        // find reports a missing folder through its exit code; the pictures it did find still count.
+        const result = await this.run(['shell', command], { serial, timeout: GALLERY_FIND_MS });
+        return logic.parseImageList(result.stdout.toString('utf8'), since);
+      } catch (error) {
+        if (!/timed out/.test(error.message)) throw error;
+        // A phone with a great many pictures takes too long to walk: from now on its own index is asked.
+        this.slowGallery.add(serial);
+      }
+    }
+    const query = `content query --uri content://media/external/images/media --projection date_modified:_data --where 'date_modified>=${Math.floor(since)}'`;
+    const result = await this.run(['shell', query], { serial, timeout: 20000 });
+    return logic.parseImageList(logic.mediaRowsToList(result.stdout.toString('utf8')), since);
   }
 
   /** The bytes of one file on the phone. */

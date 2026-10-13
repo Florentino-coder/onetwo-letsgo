@@ -318,6 +318,23 @@ test('parseSlip reads a slip that names the bank before the account', () => {
   assert.equal(slip.receiver_bank, 'SCB');
 });
 
+test('mediaRowsToList turns the rows of the picture index into lines parseImageList reads', () => {
+  const rows = 'Row: 0 date_modified=1791492650, _data=/storage/emulated/0/Pictures/Bank/slip, one.jpg\r\n'
+    + 'Row: 1 date_modified=1791492700, _data=/storage/emulated/0/Android/media/app/other.jpg\n'
+    + 'Row: 2 date_modified=1791492600, _data=/storage/emulated/0/DCIM/Camera/old.jpg\n'
+    + 'No result found.\n';
+  assert.deepEqual(logic.parseImageList(logic.mediaRowsToList(rows), 1791492640), [{ at: 1791492650, path: '/storage/emulated/0/Pictures/Bank/slip, one.jpg' }]);
+  assert.equal(logic.mediaRowsToList('No result found.'), '');
+});
+
+test('parseSlip reads the whole amount when the reader puts a dot after the comma', () => {
+  assert.equal(logic.parseSlip('1,.600.00THB\n524-0-xxx547\n044-7-xxx124').amount, '1600.00');
+  assert.equal(logic.parseSlip('1.600.00 THB').amount, '1600.00');
+  assert.equal(logic.parseSlip('12,.345,678.50').amount, '12345678.50');
+  // A figure the pattern cannot take whole gives no amount, never its last digits.
+  assert.equal(logic.parseSlip('1,,,600.00').amount, '');
+});
+
 test('parseSlip gives no accounts when it cannot tell payer from paid', () => {
   assert.equal(logic.parseSlip('739.00\n324-0-xxx718').sender_account_masked, '');
   assert.equal(logic.parseSlip('').amount, '');
