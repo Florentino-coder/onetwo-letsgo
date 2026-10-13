@@ -60,3 +60,28 @@ test('steps that read the screen parse, need words, and take a job\'s values', (
   assert.deepEqual(filled.map((step) => step.argument).slice(1, 3), ['3330444555', '1500.00']);
   assert.equal(filled[4].argument, 'ธนาคารกสิกรไทย');
 });
+
+test('the name a transfer goes to is the label after "to", and never an account number', () => {
+  assert.equal(screen.receiverName(confirmPage), 'นาย ทดสอบ ระบบ');
+  assert.equal(screen.receiverName('<hierarchy><node text="ไปที่" bounds="[0,0][9,9]" /><node text="333-0-444555" bounds="[0,0][9,9]" /></hierarchy>'), '');
+  assert.equal(screen.receiverName('<hierarchy><node text="จาก" bounds="[0,0][9,9]" /><node text="นาย ก" bounds="[0,0][9,9]" /></hierarchy>'), '');
+});
+
+test('two names are one person\'s whatever the title, and a family name counts when both give one', () => {
+  assert.equal(screen.compareNames('น.ส. ทดสอบ ระบบ', 'นางสาว ทดสอบ ระบบ'), 'same');
+  assert.equal(screen.compareNames('นาย ทดสอบ', 'ทดสอบ ระบบ'), 'same');
+  assert.equal(screen.compareNames('น.ส.ทดสอบ ระบบ', 'นางสาวทดสอบ ระบบ'), 'same');
+  assert.equal(screen.compareNames('MR. TEST SYSTEM', 'Mr Test  System'), 'same');
+  assert.equal(screen.compareNames('นาย ทดสอบ ระบบ', 'นาย ทดลอง ระบบ'), 'other');
+  assert.equal(screen.compareNames('นาย ทดสอบ ระบบ', 'นาย ทดสอบ ระบบงาน'), 'other');
+  // Not comparable: no name on one side, or Thai letters against Latin ones.
+  assert.equal(screen.compareNames('', 'นาย ทดสอบ ระบบ'), 'unknown');
+  assert.equal(screen.compareNames('นาย ทดสอบ ระบบ', '-'), 'unknown');
+  assert.equal(screen.compareNames('MR. TEST SYSTEM', 'นาย ทดสอบ ระบบ'), 'unknown');
+});
+
+test('checkname is a step that takes the fourth value of a job', () => {
+  const steps = logic.parseWorkflow('checkamount {2}\ncheckname {4}');
+  assert.equal(logic.workflowInputs(steps), 4);
+  assert.equal(logic.expandWorkflow(steps, ['3330444555', '1500.00', 'ธนาคารกสิกรไทย', 'นาย ทดสอบ ระบบ'], {}, {}, '')[1].argument, 'นาย ทดสอบ ระบบ');
+});

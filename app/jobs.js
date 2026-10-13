@@ -76,9 +76,14 @@ const DEFAULTS = {
   // The path of the request that lists the shop's paying accounts with their balances, used to
   // close a job by request (it names the paying account) and to read balances without a window.
   apiSettlementPath: '/bo/withdrawal-settlement-search?%24limit=100&%24skip=0',
+  // A "checkname" step of the paying workflow compares the name on the bank app's confirm page
+  // with the name of the job. Off, such a step passes without looking.
+  checkName: true,
   interval: 5,
   reload: false,
 };
+// What a "checkname" step says when it could not compare the two names.
+const NAME_UNSURE_RE = /name on the phone's screen cannot be compared/;
 const VALUES = [1, 2, 3];
 const FIELDS = VALUES.map((number) => `value${number}`);
 // Accepting a job and closing it are recordings: clicks on the page, replayed in order.
@@ -1738,7 +1743,8 @@ function createJobs(host) {
       audit('start', key, { ...order, serial, phone: phone.label, workflow: current.workflow });
       stage('running');
       const since = await host.phoneClock(serial);
-      await runOnPhone(current, text, serial, [order.account, typedAmount(order.amount), order.bank], key);
+      // The fourth value is the name of the account's holder, for a workflow that checks it; a job without one sends a dash.
+      await runOnPhone(current, text, serial, [order.account, typedAmount(order.amount), order.bank, order.holder || '-'], key);
       audit('workflow', key, { serial });
 
       stage('checking');
@@ -1784,7 +1790,14 @@ function createJobs(host) {
       setStatus('done', `${phone.label} · ${order.amount} · ${order.bank}`);
       return view();
     } catch (error) {
-      if (begun) {
+      if (begun && !closing && NAME_UNSURE_RE.test(error.message)) {
+        // The names could not be compared, and nothing was confirmed: no money moved. The row is
+        // left for the operator and never begun again; the phone goes on, entering its app afresh.
+        mark(order, 'name', { detail: error.message });
+        audit('name', key, { serial, message: error.message });
+        host.log(`Withdrawal ${order.amount} to ${order.bank} was passed over on ${phone.label}: ${error.message}`, 'error');
+        if (host.notify) host.notify(`${phone.label}: ข้ามรายการ ${order.amount} เทียบชื่อบัญชีไม่ได้ เงินยังไม่ออก`);
+      } else if (begun) {
         mark(order, 'failed', { detail: error.message });
         audit('error', key, { serial, message: error.message });
         // The phone did its part when the fault is in closing: that is the page's fault, and every phone's.

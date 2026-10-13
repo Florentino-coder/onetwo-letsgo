@@ -51,7 +51,8 @@ function main() {
     name, version,
     // A pack runs on the program that was current when it was built, and on any newer one.
     // A pack asks for the oldest program that knows every step it uses.
-    minApp: Object.values(workflows).some((text) => text.split(/\r?\n/).some((each) => ['scrolltap', 'waittext', 'checktext', 'checkamount', 'stoptext'].includes(each.trim().split(' ')[0]))) ? '0.24.0'
+    minApp: Object.values(workflows).some((text) => text.split(/\r?\n/).some((each) => each.trim().split(' ')[0] === 'checkname')) ? '0.25.0'
+      : Object.values(workflows).some((text) => text.split(/\r?\n/).some((each) => ['scrolltap', 'waittext', 'checktext', 'checkamount', 'stoptext'].includes(each.trim().split(' ')[0]))) ? '0.24.0'
       : Object.values(workflows).some((text) => text.split(/\r?\n/).some((each) => ['taptext', 'taptext?'].includes(each.trim().split(' ')[0]))) ? '0.23.0' : '0.21.0',
     workflows, pickSets,
     jobs: Object.fromEntries(pack.JOB_KEYS.filter((key) => key in jobs).map((key) => [key, jobs[key]])),

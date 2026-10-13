@@ -7,7 +7,7 @@ const S = { state: null, page: 'home', wizard: 'link', signedIn: false, busy: fa
 const SPEEDS = [[1.5, 'ช้า (เครื่องหรือเน็ตช้า)'], [1, 'ปกติ'], [0.8, 'เร็ว'], [0.6, 'เร็วมาก']];
 const BANK = 'ธนาคารกรุงเทพ';
 const PHONE_STATE = { running: 'กำลังโอน', checking: 'อ่านสลิป', closing: 'ปิดงาน', resting: 'กำลังพัก' };
-const ROW_STATE = { started: ['ค้าง ต้องตรวจ', 'bad'], paid: ['จ่ายแล้ว รอปิดงาน', 'run'], done: ['ปิดงานแล้ว', 'ok'], failed: ['ไม่สำเร็จ', 'bad'], resolved: ['จัดการแล้ว', 'wait'] };
+const ROW_STATE = { started: ['ค้าง ต้องตรวจ', 'bad'], paid: ['จ่ายแล้ว รอปิดงาน', 'run'], done: ['ปิดงานแล้ว', 'ok'], failed: ['ไม่สำเร็จ', 'bad'], name: ['ชื่อไม่ตรง', 'bad'], resolved: ['จัดการแล้ว', 'wait'] };
 const LICENSE_REASON = { missing: 'ยังไม่ได้ใส่รหัสเปิดใช้', forged: 'รหัสเปิดใช้ไม่ถูกต้อง', machine: 'รหัสนี้เป็นของคอมเครื่องอื่น', expired: 'รหัสเปิดใช้หมดอายุแล้ว', cancelled: 'รหัสเปิดใช้ถูกยกเลิก', offline: 'ต้องต่ออินเทอร์เน็ตเพื่อตรวจรหัสเปิดใช้' };
 
 // ── small tools ──────────────────────────────────────────────────────────
@@ -42,6 +42,8 @@ const isToday = (at) => new Date(at).toDateString() === new Date().toDateString(
 /** What went wrong, in Thai. The program's own messages are English, for the log. */
 const FAULTS = [
   [/slip does not agree on .*the amount \(slip ([^,]+), row ([^)]+)\)/, (m) => `ยอดในสลิปไม่ตรงกับรายการ (สลิป ${m[1] === 'unread' ? 'อ่านไม่ได้' : m[1]} · รายการ ${m[2]})`],
+  [/name on the phone's screen \("([^"]*)"\) is not the name of the job \("([^"]*)"\)/, (m) => `ชื่อผู้รับไม่ตรง: แอปธนาคารแสดง "${m[1]}" รายการคือ "${m[2]}" โปรแกรมจึงไม่กดยืนยัน`],
+  [/name on the phone's screen cannot be compared .*\(screen "([^"]*)", job "([^"]*)"\)/, (m) => `เทียบชื่อผู้รับไม่ได้: แอปธนาคารแสดง "${m[1] === 'no name' ? 'ไม่มีชื่อ' : m[1]}" รายการคือ "${m[2]}" โปรแกรมข้ามรายการนี้`],
   [/slip does not agree on .*the account paid to/, () => 'เลขบัญชีปลายทางในสลิปไม่ตรงกับรายการ'],
   [/slip does not agree on .*the paying account/, () => 'สลิปไม่ได้มาจากบัญชีของเครื่องนี้'],
   [/slip does not agree on .*the paying bank/, () => 'ธนาคารในสลิปไม่ตรงกับบัญชีของเครื่องนี้'],
@@ -309,7 +311,9 @@ function stopBlock(stop, serial) {
     h('div', { class: 'x' },
       h('b', null, `${device ? `${device.label}: ` : ''}${thai(stop.message)}`),
       h('div', null, `${about} · หยุดเมื่อ ${timeOf(stop.at)}`),
-      h('small', null, 'เงินอาจออกแล้ว เปิดแอปธนาคารของเครื่องดูรายการล่าสุดก่อน ถ้าเงินออกแล้ว ปิดงานในหลังบ้านเอง ถ้าเงินยังไม่ออก โอนรายการนี้เองด้วยมือ โปรแกรมไม่จ่ายรายการนี้ซ้ำ เสร็จแล้วกด "จัดการแล้ว" จากนั้นจึงกดรีเซ็ต')),
+      h('small', null, /is not the name of the job/.test(stop.message)
+        ? 'เงินยังไม่ออก โปรแกรมหยุดที่หน้ายืนยันและไม่ได้กดยืนยัน ตรวจชื่อและเลขบัญชีของรายการนี้ในหลังบ้าน ถ้าถูกต้อง โอนรายการนี้เองด้วยมือ โปรแกรมไม่จ่ายรายการนี้ซ้ำ เสร็จแล้วกด "จัดการแล้ว" จากนั้นจึงกดรีเซ็ต'
+        : 'เงินอาจออกแล้ว เปิดแอปธนาคารของเครื่องดูรายการล่าสุดก่อน ถ้าเงินออกแล้ว ปิดงานในหลังบ้านเอง ถ้าเงินยังไม่ออก โอนรายการนี้เองด้วยมือ โปรแกรมไม่จ่ายรายการนี้ซ้ำ เสร็จแล้วกด "จัดการแล้ว" จากนั้นจึงกดรีเซ็ต')),
     h('div', { class: 'acts' },
       open && h('button', { class: 'btn', onclick: () => act('jobs:resolve', { key: stop.key, note: 'ตรวจด้วยมือ' }, 'บันทึกว่าจัดการแล้ว') }, 'จัดการแล้ว'),
       h('button', { class: 'btn red', disabled: Boolean(open), title: open ? 'กด "จัดการแล้ว" ก่อน' : '', onclick: () => act('jobs:unhalt', { serial }, 'รีเซ็ตแล้ว') }, serial ? 'รีเซ็ตเครื่องนี้' : 'รีเซ็ต')));
@@ -386,7 +390,7 @@ function historyRow(entry) {
   const { devices } = S.state;
   const label = (serial) => (devices.find((device) => device.serial === serial) || { label: serial || '—' }).label;
   const state = ROW_STATE[entry.state] || [entry.state, 'wait'];
-  const open = entry.state === 'started' || entry.state === 'paid';
+  const open = entry.state === 'started' || entry.state === 'paid' || entry.state === 'name';
   return h('div', { class: 'row past' },
     h('span', { class: 'c' }, `${dayOf(entry.at)} ${timeOf(entry.at).slice(0, 5)}`),
     h('span', { class: 'a' }, money(entry.amount)),
@@ -419,7 +423,7 @@ function runFind() {
 }
 
 function history() {
-  const states = [['', 'ทุกสถานะ'], ['done', 'ปิดงานแล้ว'], ['paid', 'จ่ายแล้ว รอปิดงาน'], ['started', 'ค้าง ต้องตรวจ'], ['failed', 'ไม่สำเร็จ'], ['resolved', 'จัดการแล้ว']];
+  const states = [['', 'ทุกสถานะ'], ['done', 'ปิดงานแล้ว'], ['paid', 'จ่ายแล้ว รอปิดงาน'], ['started', 'ค้าง ต้องตรวจ'], ['failed', 'ไม่สำเร็จ'], ['name', 'ชื่อไม่ตรง'], ['resolved', 'จัดการแล้ว']];
   const page = shell([
     h('div', { class: 'mh' }, h('div', null, h('div', { class: 't' }, 'ประวัติ'), h('div', { class: 's' }, 'ทุกรายการที่โปรแกรมเริ่มจ่าย ใหม่สุดอยู่บน เก็บในเครื่องนี้เท่านั้น'))),
     h('div', { class: 'finder' },
@@ -469,6 +473,7 @@ function settings() {
         pack.current && pack.current.phone.model && line('ทดสอบกับ', h('span', { class: 'v plain' }, `${pack.current.phone.model}${pack.current.phone.width ? ` · ${pack.current.phone.width}×${pack.current.phone.height}` : ''}`)),
         h('div', { class: 'h gap' }, 'การจ่าย'),
         line('ช่วงยอดหน้าเว็บ', h('span', { class: 'v plain' }, 'ให้หลังบ้านแสดงเฉพาะยอดของเครื่อง'), h('button', { class: `sw ${jobs.config.filter ? 'on' : ''}`, onclick: () => act('jobs:set', { filter: !jobs.config.filter }) }, h('i'))),
+        line('เช็กชื่อผู้รับ', h('span', { class: 'v plain' }, 'ชื่อบนหน้ายืนยันต้องตรงกับรายการ จึงกดยืนยัน'), h('button', { class: `sw ${jobs.config.checkName !== false ? 'on' : ''}`, onclick: () => act('jobs:set', { checkName: jobs.config.checkName === false }) }, h('i'))),
         h('div', { class: 'h gap' }, 'ธนาคารที่ข้าม (ทุกเครื่อง)'),
         bankChips(jobs.skipBanks, (codes) => act('banks:skip', { codes })),
         h('div', { class: 'hint pad' }, 'กดเลือกธนาคารที่โอนไม่ได้ชั่วคราว รายการไปธนาคารนั้นจะรออยู่ในคิว เครื่องจ่ายรายการอื่นต่อ กดอีกครั้งเพื่อเอาออก ตั้งแยกรายเครื่องได้ในหน้าต่างของเครื่อง')),

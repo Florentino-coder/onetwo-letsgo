@@ -48,7 +48,7 @@ const SCROLLTAP_PAGES = 6;
 // A read of a phone's screen is slow (seconds). Steps that only look share one read; any step
 // that touches the phone, or waits, throws it away.
 const SCREEN_FRESH_MS = 8000;
-const SCREEN_STEPS = new Set(['taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checkamount', 'stoptext']);
+const SCREEN_STEPS = new Set(['taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checkamount', 'checkname', 'stoptext']);
 const screens = new Map();
 
 async function screenOf(serial, again) {
@@ -832,6 +832,22 @@ async function runWorkflowStep(device, step, workflowName) {
       // The value is the job's, not the screen's: saying it tells nothing the job did not.
       throw new Error(step.command === 'checkamount' ? `The phone's screen does not show the amount ${step.argument}. Nothing was confirmed.` : `The phone's screen does not show "${String(step.argument).replace(/\d(?=\d{4})/g, 'x')}". Nothing was confirmed.`);
     }
+    case 'checkname': {
+      // Before a button that moves money is pressed, the page must name the person the job names.
+      // The check is switched off in Settings by those who do not want it.
+      if ((store.config.jobs || {}).checkName === false) return 'not checked: switched off';
+      const until = Date.now() + TAPTEXT_WAIT_MS * payAccount(serial).scale;
+      let shown = '';
+      for (let look = 0; ; look += 1) {
+        shown = screen.receiverName(await screenOf(serial, look > 0));
+        if (shown || Date.now() >= until) break;
+        await sleep(TAPTEXT_RETRY_MS);
+      }
+      const verdict = screen.compareNames(shown, step.argument);
+      if (verdict === 'same') return 'the same name';
+      if (verdict === 'other') throw new Error(`The name on the phone's screen ("${shown}") is not the name of the job ("${step.argument}"). Nothing was confirmed.`);
+      throw new Error(`The name on the phone's screen cannot be compared with the name of the job (screen "${shown || 'no name'}", job "${step.argument}"). Nothing was confirmed.`);
+    }
     case 'stoptext': {
       // Words that mean the app refused: stop here and say so, rather than tap on blindly.
       if (logic.findUiText(await screenOf(serial, false), step.argument)) throw new Error(`The phone shows "${step.argument}".`);
@@ -1273,7 +1289,7 @@ const USER_CALLS = new Set([
 const UNLICENSED_CALLS = new Set(['state:get', 'license:set', 'update:check', 'update:restart', 'folder:open']);
 // The settings of a job the user program may change; the rest come from the pack. The link
 // addresses stay on this computer, like the back-office link, and are set once at first run.
-const USER_JOB_KEYS = ['url', 'filter', 'apiBase', 'apiOrigin', 'apiSettlementPath'];
+const USER_JOB_KEYS = ['url', 'filter', 'apiBase', 'apiOrigin', 'apiSettlementPath', 'checkName'];
 
 function handle(channel, handler) {
   ipcMain.handle(channel, async (_event, payload) => {

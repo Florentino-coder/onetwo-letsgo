@@ -41,9 +41,54 @@ function showsAmount(xml, amount) {
   });
 }
 
+// Words before a person's name that are not part of it. A back office and a bank write them differently.
+const NAME_TITLES = ['นางสาว', 'น.ส.', 'นส.', 'นาย', 'นาง', 'เด็กชาย', 'เด็กหญิง', 'ด.ช.', 'ด.ญ.', 'คุณ', 'mister', 'mrs.', 'mrs', 'miss', 'mr.', 'mr', 'ms.', 'ms'];
+// The label a bank app puts before the account a transfer goes to.
+const RECEIVER_LABELS = ['ไปที่', 'ไปยัง', 'to'];
+
+/** A name as its words, without a title before it, written one way: no marks apart, no capitals. */
+function nameWords(name) {
+  const tidy = (word) => word.normalize('NFKD').replace(/[\u200b-\u200d\ufeff]/g, '').toLowerCase();
+  let words = String(name || '').trim().split(/\s+/).filter(Boolean).map(tidy);
+  const titles = NAME_TITLES.map(tidy);
+  // A title stands by itself ("นาย สมชาย") or is written against the name ("น.ส.สมหญิง").
+  while (words.length > 1 && titles.includes(words[0])) words = words.slice(1);
+  const joined = titles.filter((title) => title.includes('.')).find((title) => words.length && words[0].startsWith(title) && words[0].length > title.length);
+  if (joined) words = [words[0].slice(joined.length), ...words.slice(1)];
+  return words;
+}
+
+/** The name of the person a transfer goes to, as the page shows it after its "to" label; '' when it shows none. */
+function receiverName(xml) {
+  const list = labels(xml);
+  const at = list.findIndex((label) => RECEIVER_LABELS.includes(label.toLowerCase()));
+  const name = at < 0 ? '' : list[at + 1] || '';
+  // A number there is an account, not a name.
+  return /\p{L}/u.test(name) && !/^[\d\s-]+$/.test(name) ? name : '';
+}
+
+/**
+ * Whether two names are one person's: 'same', 'other', or 'unknown' when they cannot be compared,
+ * because one is missing or one is in Thai letters and the other is not. The first names must be
+ * the same; the family names too when both sides give one.
+ */
+function compareNames(shown, wanted) {
+  const [a, b] = [nameWords(shown), nameWords(wanted)];
+  if (!a.length || !b.length || !/\p{L}/u.test(a.join('')) || !/\p{L}/u.test(b.join(''))) return 'unknown';
+  const thai = (words) => /[\u0e00-\u0e7f]/.test(words.join(''));
+  if (thai(a) !== thai(b)) return 'unknown';
+  if (a[0] !== b[0]) {
+    // A title written against the name with no dot ("นายสมชาย") cannot be told from a name; allow it on either side.
+    const titles = NAME_TITLES.map((title) => title.normalize('NFKD').toLowerCase());
+    if (!titles.some((title) => a[0] === title + b[0] || b[0] === title + a[0])) return 'other';
+  }
+  if (a.length > 1 && b.length > 1 && a.slice(1).join('') !== b.slice(1).join('')) return 'other';
+  return 'same';
+}
+
 /** A few words of what the screen says, with its numbers hidden, for saying where a phone is stuck. */
 function gist(xml, count = 5) {
   return labels(xml).filter((label) => label.length > 1).slice(0, count).map((label) => label.replace(/\d{3,}/g, '#').slice(0, 40)).join(' | ');
 }
 
-module.exports = { labels, showsAccount, showsAmount, gist };
+module.exports = { labels, showsAccount, showsAmount, gist, receiverName, compareNames };
