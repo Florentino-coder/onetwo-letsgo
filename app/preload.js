@@ -10,7 +10,7 @@ const CALLS = [
   'policy:detect', 'policy:save', 'policy:delete',
   'workflow:save', 'workflow:delete', 'workflow:preview', 'workflow:run', 'workflow:record',
   'point:save', 'point:delete', 'pick:save', 'pick:edit', 'pick:rename', 'pick:delete', 'pick:scroll', 'pick:goto', 'touch:start', 'touch:stop', 'api:token',
-  'jobs:set', 'jobs:open', 'jobs:pick', 'jobs:record', 'jobs:clear','jobs:read', 'jobs:run', 'jobs:auto', 'jobs:screen', 'jobs:orders', 'jobs:pay', 'jobs:payauto', 'jobs:unhalt', 'jobs:resolve',
+  'jobs:set', 'jobs:apitoken', 'jobs:open', 'jobs:pick', 'jobs:record', 'jobs:clear','jobs:read', 'jobs:run', 'jobs:auto', 'jobs:screen', 'jobs:orders', 'jobs:pay', 'jobs:payauto', 'jobs:unhalt', 'jobs:resolve',
   'folder:open', 'update:check', 'update:restart',
   'handout:view', 'handout:issue', 'handout:cancel', 'handout:pack', 'handout:release',
   'license:set', 'pack:import', 'pack:rollback', 'user:setup', 'user:signed',

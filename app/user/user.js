@@ -65,6 +65,7 @@ const FAULTS = [
   [/Every phone that can pay .* is busy/, () => 'เครื่องที่รับยอดนี้กำลังทำงานอยู่ ลองใหม่อีกครู่'],
   [/The phone that takes .* is stopped/, () => 'เครื่องที่รับยอดนี้หยุดอยู่ ตรวจแล้วรีเซ็ตเครื่องนั้นก่อน'],
   [/No online phone can pay/, () => 'ไม่มีเครื่องที่พร้อมจ่ายยอดนี้'],
+  [/is still being checked/, () => 'เครื่องที่รับยอดนี้กำลังตรวจสอบอยู่ รอสักครู่แล้วลองใหม่'],
   [/no close-job profile/, () => 'ชุดงานนี้ไม่มีขั้นตอนปิดงานสำหรับหลังบ้านนี้'],
   [/Choose a saved workflow for paying first/, () => 'ยังไม่มีชุดงาน นำเข้าชุดงานที่หน้าตั้งค่า'],
   [/Switch automatic mode off and wait/, () => 'ปิดจ่ายอัตโนมัติและรอให้ทุกเครื่องทำงานเสร็จก่อน'],
@@ -177,14 +178,18 @@ function phoneView(device) {
   else if (!device.online) word = ['ออฟไลน์', 'wait'];
   else if (working) word = [PHONE_STATE[working.state] || 'กำลังทำงาน', 'run'];
   else if (unset) word = ['ยังตั้งไม่ครบ', 'run'];
-  else if (!device.payOn) word = ['ปิดอยู่', 'wait'];
-  else if (listed && listed.on === false) word = ['ปิดในหลังบ้าน', 'wait'];
+  else if ((jobs.checking || []).includes(device.serial)) word = ['กำลังตรวจสอบ', 'run'];
+  else if (!device.payOn || (listed && listed.on === false)) word = ['ปิดอยู่', 'wait'];
+  else if (jobs.accounts.fresh && !listed) word = ['ไม่พบบัญชีในหลังบ้าน', 'bad'];
   else if (balance !== null && balance < device.amountMin) word = ['เงินหมด', 'bad'];
   else if (device.pay.cap !== null && spent >= device.pay.cap) word = ['ถึงเพดาน', 'wait'];
   return { device, balance, spent, stop, word, ready: word[0] === 'พร้อม' || Boolean(working) };
 }
 
-const signedOut = () => !S.state.jobs.open || !S.signedIn;
+/** In link mode a pass held is "signed in"; otherwise the back-office window must be signed in. */
+const hasPass = () => Boolean(S.state.jobs.api && S.state.jobs.api.pass);
+const apiBaseSet = () => /^https:\/\/\S+$/i.test(String(S.state.jobs.config.apiBase || ''));
+const signedOut = () => !hasPass() && (!S.state.jobs.open || !S.signedIn);
 const packName = () => {
   const { current } = S.state.user.pack;
   return current ? `${current.name} ${current.version}` : 'ยังไม่มีชุดงาน';
@@ -198,62 +203,64 @@ function brandMark() {
 
 // ── pages ────────────────────────────────────────────────────────────────
 
-function activation() {
-  const { license } = S.state.user;
-  return h('div', { class: 'wiz' },
-    wizardSteps('code'),
-    h('div', { class: 'form' },
-      h('div', { class: 't' }, 'รหัสเปิดใช้'),
-      h('div', { class: 's' }, 'ส่งรหัสเครื่องด้านล่างให้ผู้พัฒนา แล้ววางรหัสเปิดใช้ที่ได้รับกลับมา รหัสหนึ่งใช้ได้กับคอมเครื่องนี้เครื่องเดียว'),
-      h('div', { class: 'fld' }, h('label', null, 'รหัสเครื่องของคอมนี้'),
-        h('div', { class: 'acts' }, h('span', { class: 'code' }, license.machine || 'อ่านไม่ได้'),
-          h('button', { class: 'lk', onclick: () => navigator.clipboard.writeText(license.machine).then(() => toast('คัดลอกรหัสเครื่องแล้ว', 'good')) }, 'คัดลอก'))),
-      h('div', { class: 'fld' }, h('label', null, 'รหัสเปิดใช้'), h('textarea', { class: 'inp', id: 'license-code', spellcheck: 'false' })),
-      license.reason && license.reason !== 'missing' && h('div', { class: 'badline' }, LICENSE_REASON[license.reason] || 'รหัสเปิดใช้ใช้ไม่ได้'),
-      h('div', { class: 'acts' }, h('button', { class: 'btn gold', onclick: () => act('license:set', { code: $('license-code').value }, 'เปิดใช้แล้ว') }, 'เปิดใช้'))));
-}
-
-function wizardSteps(now) {
-  const { license } = S.state.user;
-  const order = ['code', 'link', 'login'];
-  const names = { code: 'รหัสเปิดใช้', link: 'ลิงก์หลังบ้าน', login: 'ล็อกอินหลังบ้าน' };
+/** The two onboarding steps, shown down the side of the setup and gate pages. */
+function onboardSteps(now) {
+  const order = ['setup', 'pass'];
+  const names = { setup: 'ตั้งค่าที่อยู่หลังบ้าน', pass: 'ใส่พาสเข้าใช้งาน' };
   const mark = (key, index) => {
     const done = order.indexOf(key) < order.indexOf(now);
-    return h('div', { class: `stepmark ${done ? 'done' : key === now ? 'now' : ''}` }, h('span', { class: 'd' }, done ? '✓' : index + 1),
-      h('span', null, names[key], key === 'code' && license.ok && h('small', null, `ออกโดย ${S.state.user.developer}`)));
+    return h('div', { class: `stepmark ${done ? 'done' : key === now ? 'now' : ''}` }, h('span', { class: 'd' }, done ? '✓' : index + 1), h('span', null, names[key]));
   };
   return h('div', { class: 'steps' },
     brandMark(),
     order.map(mark),
-    h('div', { class: 'stepmark' }, h('span', { class: 'd' }, 4), h('span', null, 'เครื่องและบัญชี', h('small', null, 'ตั้งที่หน้าหลัก'))),
-    h('div', { class: 'stepmark' }, h('span', { class: 'd' }, 5), h('span', null, 'ลองหนึ่งรายการ', h('small', null, 'กดจ่ายเองที่หน้าหลัก'))),
+    h('div', { class: 'stepmark' }, h('span', { class: 'd' }, 3), h('span', null, 'เครื่องและบัญชี', h('small', null, 'ตั้งที่หน้าหลัก'))),
+    h('div', { class: 'stepmark' }, h('span', { class: 'd' }, 4), h('span', null, 'ลองหนึ่งรายการ', h('small', null, 'กดจ่ายเองที่หน้าหลัก'))),
     h('div', { class: 'foot' }, `เวอร์ชัน ${S.state.version}`));
 }
 
-function wizard() {
+/** First run: the addresses of the back office, saved on this computer. Shown once, until set. */
+function setupPage() {
   const { jobs } = S.state;
-  if (S.wizard === 'link') {
-    return h('div', { class: 'wiz' }, wizardSteps('link'),
-      h('div', { class: 'form' },
-        h('div', { class: 't' }, 'ลิงก์หลังบ้านของคุณ'),
-        h('div', { class: 's' }, 'วางลิงก์หน้าเข้าสู่ระบบของหลังบ้าน โปรแกรมจำไว้ในเครื่องนี้เท่านั้น เปลี่ยนได้ภายหลังที่หน้าตั้งค่า'),
-        h('div', { class: 'fld' }, h('label', null, 'ลิงก์หลังบ้าน'), h('input', { class: 'inp', id: 'wizard-url', value: jobs.config.url, placeholder: 'https://', spellcheck: 'false' })),
-        h('div', { class: 'acts' }, h('button', { class: 'btn gold', onclick: async () => {
-          const url = $('wizard-url').value.trim();
-          if (!/^https:\/\/\S+$/i.test(url)) return toast('ลิงก์ต้องขึ้นต้นด้วย https://', 'bad');
-          if (await act('jobs:set', { url })) { S.wizard = 'login'; render(true); }
-          return null;
-        } }, 'ต่อไป'))));
-  }
-  return h('div', { class: 'wiz' }, wizardSteps('login'),
+  const fld = (label, id, value, placeholder, hint) => h('div', { class: 'fld' },
+    h('label', null, label), h('input', { class: 'inp', id, value: value || '', placeholder, spellcheck: 'false' }), hint && h('small', { class: 'hint' }, hint));
+  return h('div', { class: 'wiz' }, onboardSteps('setup'),
     h('div', { class: 'form' },
-      h('div', { class: 't' }, 'ล็อกอินหลังบ้าน'),
-      h('div', { class: 's' }, 'กดเปิดหน้าต่างหลังบ้าน แล้วล็อกอินด้วยชื่อและรหัสของคุณเอง โปรแกรมไม่เห็นและไม่เก็บรหัสผ่าน ปิดหน้าต่างนั้นได้ โปรแกรมยังทำงานต่อ'),
-      S.signedIn ? h('div', { class: 'okline' }, 'ล็อกอินอยู่') : h('div', { class: 'hint' }, jobs.open ? 'ยังไม่ได้ล็อกอิน' : 'ยังไม่ได้เปิดหน้าต่างหลังบ้าน'),
+      h('div', { class: 't' }, 'ตั้งค่าหลังบ้าน (ครั้งแรกครั้งเดียว)'),
+      h('div', { class: 's' }, 'ใส่ที่อยู่ของหลังบ้านจากแท็บ Network ใน F12 โปรแกรมจำไว้ในเครื่องนี้เท่านั้น เปลี่ยนได้ภายหลังที่หน้าตั้งค่า'),
+      fld('ที่อยู่บริการ (apiBase)', 'setup-apibase', jobs.config.apiBase, 'https://....api.example.com', 'ช่อง Request URL ตัดเหลือเฉพาะชื่อโฮสต์ก็ได้ วางทั้งลิงก์ก็ได้'),
+      fld('ที่อยู่หน้าเว็บ (apiOrigin)', 'setup-apiorigin', jobs.config.apiOrigin, 'https://manage.example.com', 'ช่อง origin หรือ referer'),
+      h('div', { class: 'acts' }, h('button', { class: 'btn gold', onclick: async () => {
+        const apiBase = $('setup-apibase').value.trim();
+        const apiOrigin = $('setup-apiorigin').value.trim();
+        if (!/^https:\/\/\S+$/i.test(apiBase)) return toast('ที่อยู่บริการต้องขึ้นต้นด้วย https://', 'bad');
+        if (apiOrigin && !/^https:\/\/\S+$/i.test(apiOrigin)) return toast('ที่อยู่หน้าเว็บต้องขึ้นต้นด้วย https://', 'bad');
+        if (await act('jobs:set', { apiBase, apiOrigin }, 'บันทึกที่อยู่แล้ว')) { await ask('user:setup', { done: true }); S.editSetup = false; render(true); }
+        return null;
+      } }, 'บันทึก ไปใส่พาส'))));
+}
+
+/** Every launch once the addresses are set: paste the pass. Kept in memory, gone when the app closes. */
+function gatePage() {
+  const api = S.state.jobs.api || {};
+  const status = api.wrong ? ['พาสหรือกุญแจไม่ตรง ลองวางพาสใหม่', 'bad'] : api.pass ? ['กำลังตรวจพาส...', 'run'] : ['', ''];
+  return h('div', { class: 'wiz' }, onboardSteps('pass'),
+    h('div', { class: 'form' },
+      h('div', { class: 't' }, 'ใส่พาสเพื่อเข้าใช้งาน'),
+      h('div', { class: 's' }, 'วางพาส (Bearer token) จากหลังบ้าน โปรแกรมเก็บไว้ในหน่วยความจำเท่านั้น หายเมื่อปิดโปรแกรม ต้องวางใหม่ทุกครั้งที่เปิด'),
+      h('div', { class: 'fld' }, h('label', null, 'พาส (Bearer token)'),
+        h('input', { class: 'inp', id: 'gate-pass', type: 'password', autocomplete: 'off', spellcheck: 'false', placeholder: 'วางพาสที่นี่',
+          onkeydown: (event) => { if (event.key === 'Enter') $('gate-enter').click(); } })),
+      status[0] && h('div', { class: status[1] === 'bad' ? 'badline' : 'okline' }, status[0]),
       h('div', { class: 'acts' },
-        h('button', { class: 'btn', onclick: () => { S.wizard = 'link'; render(true); } }, 'ย้อนกลับ'),
-        h('button', { class: `btn ${S.signedIn ? '' : 'gold'}`, onclick: () => act('jobs:open') }, jobs.open ? 'แสดงหน้าต่างหลังบ้าน' : 'เปิดหน้าล็อกอิน'),
-        h('button', { class: `btn ${S.signedIn ? 'gold' : ''}`, disabled: !S.signedIn, onclick: () => act('user:setup', { done: true }) }, 'เสร็จ ไปหน้าหลัก'))));
+        h('button', { class: 'lk', onclick: () => { S.editSetup = true; render(true); } }, 'แก้ที่อยู่หลังบ้าน'),
+        h('span', { class: 'sp' }),
+        h('button', { class: 'btn gold', id: 'gate-enter', onclick: async () => {
+          const token = $('gate-pass').value.trim();
+          if (!token) return toast('วางพาสก่อน', 'bad');
+          await act('jobs:apitoken', { token }, 'รับพาสแล้ว');
+          return render(true);
+        } }, 'เข้าใช้งาน'))));
 }
 
 function shell(content) {
@@ -313,7 +320,7 @@ function home() {
     let status;
     if (onPhone) status = h('span', { class: 'st run' }, `${worker ? worker.label : ''} · ${PHONE_STATE[onPhone[1].state] || 'กำลังทำงาน'}`);
     else if (order.state) status = h('span', { class: `st ${ROW_STATE[order.state] ? ROW_STATE[order.state][1] : 'wait'}` }, ROW_STATE[order.state] ? ROW_STATE[order.state][0] : order.state);
-    else if (!order.serial) status = h('span', { class: 'st wait' }, { cap: 'เครื่องถึงเพดาน', balance: 'เงินในเครื่องไม่พอ', off: 'บัญชีเครื่องปิดอยู่', stopped: 'เครื่องหยุดอยู่' }[order.short] || 'ไม่มีเครื่องรับยอดนี้');
+    else if (!order.serial) status = h('span', { class: 'st wait' }, { cap: 'เครื่องถึงเพดาน', balance: 'เงินในเครื่องไม่พอ', off: 'บัญชีเครื่องปิดอยู่', stopped: 'เครื่องหยุดอยู่', checking: 'กำลังตรวจสอบเครื่อง', missing: 'ไม่พบบัญชีเครื่องในหลังบ้าน' }[order.short] || (devices.some((device) => device.online && !device.payOn && device.amountMin !== null && Number(order.amount) >= device.amountMin && Number(order.amount) <= device.amountMax) ? 'บัญชีเครื่องปิดอยู่' : 'ไม่มีเครื่องรับยอดนี้'));
     else if (jobs.payAuto) status = h('span', { class: 'st wait' }, `รอ · ${order.phone}`);
     else status = h('span', { class: 'st' }, h('button', { class: 'btn small gold', disabled: Boolean(jobs.halt) || out, onclick: () => act('jobs:pay', { key: order.key }) }, `จ่าย · ${order.phone}`));
     return h('div', { class: 'row order' }, h('span', { class: 'a' }, money(order.amount)),
@@ -430,14 +437,10 @@ function settings() {
     h('div', { class: 'two' },
       h('div', { class: 'pane' },
         h('div', { class: 'h' }, 'หลังบ้าน'),
-        line('ลิงก์', h('input', { class: 'inp', id: 'settings-url', value: jobs.config.url, spellcheck: 'false' }),
-          h('button', { class: 'lk', onclick: () => {
-            const url = $('settings-url').value.trim();
-            if (!/^https:\/\/\S+$/i.test(url)) return toast('ลิงก์ต้องขึ้นต้นด้วย https://', 'bad');
-            return act('jobs:set', { url }, 'บันทึกลิงก์แล้ว ปิดแล้วเปิดโปรแกรมใหม่เพื่อใช้ลิงก์ใหม่');
-          } }, 'บันทึก')),
-        line('สถานะ', h('span', { class: `v plain ${signedOut() ? 'bad' : 'ok'}` }, signedOut() ? (jobs.open ? 'ยังไม่ล็อกอิน' : 'ยังไม่เปิด') : 'ล็อกอินอยู่'),
-          h('button', { class: 'lk', onclick: () => act('jobs:open') }, jobs.open ? 'แสดงหน้าต่าง' : 'เปิดหน้าล็อกอิน')),
+        line('ที่อยู่บริการ', h('span', { class: 'v plain mono' }, jobs.config.apiBase || '—'),
+          h('button', { class: 'lk', onclick: () => { S.editSetup = true; render(true); } }, 'แก้ที่อยู่')),
+        line('พาส', h('span', { class: `v plain ${hasPass() ? 'ok' : 'bad'}` }, hasPass() ? (jobs.api.wrong ? 'กุญแจไม่ตรง' : jobs.api.proven ? 'อ่านรายการได้' : 'มีพาสแล้ว') : 'ยังไม่มีพาส'),
+          hasPass() && h('button', { class: 'lk', onclick: () => act('jobs:apitoken', { token: '' }, 'ล้างพาสแล้ว') }, 'ล้างพาส')),
         h('div', { class: 'h gap' }, 'ชุดงาน'),
         line('ที่ใช้อยู่', h('span', { class: 'v' }, packName()), h('button', { class: 'lk', onclick: () => act('pack:import', {}, 'นำเข้าชุดงานแล้ว') }, 'นำเข้าจากไฟล์')),
         pack.previous && line('รุ่นก่อน', h('span', { class: 'v' }, `${pack.previous.name} ${pack.previous.version}`), h('button', { class: 'lk', onclick: () => act('pack:rollback', {}, 'ย้อนกลับไปชุดงานรุ่นก่อนแล้ว') }, 'ย้อนกลับไปรุ่นนี้')),
@@ -531,7 +534,7 @@ function openPhone(serial) {
   $('modal').replaceChildren(h('div', { class: 'veil', onmousedown: (event) => { if (event.target === event.currentTarget) close(); } },
     h('div', { class: 'sheet' },
       h('div', { class: 'acts' }, h('div', { class: 't' }, device.label), h('span', { class: `st ${view.word[1]}` }, view.word[0]), h('span', { class: 'sp' }),
-        h('button', { class: `sw ${device.payOn ? 'on' : ''}`, onclick: async () => {
+        h('button', { class: `sw ${device.payOn ? 'on' : ''}`, disabled: view.word[0] === 'กำลังตรวจสอบ', title: 'สถานะนี้คือสถานะของบัญชีในหน้ารายการปรับยอดถอน กดแล้วโปรแกรมเปิดหรือปิดบัญชีที่หลังบ้านให้', onclick: async () => {
           const data = await ask('device:pay', { serial, on: !device.payOn });
           if (data === null) return;
           absorb(data);
@@ -570,10 +573,9 @@ function render(force = false) {
     return;
   }
   S.stale = false;
-  const { user } = S.state;
   let page;
-  if (!user.license.ok) page = activation();
-  else if (!user.setupDone) page = wizard();
+  if (!apiBaseSet() || S.editSetup) page = setupPage();
+  else if (!hasPass()) page = gatePage();
   else page = { home, history, settings }[S.page]();
   const scroll = [...document.querySelectorAll('#app .list, #app .main')].map((el) => el.scrollTop);
   $('app').replaceChildren(page);
@@ -581,7 +583,7 @@ function render(force = false) {
 }
 
 async function checkSignedIn() {
-  if (!S.state || !S.state.user.license.ok) return;
+  if (!S.state) return;
   const answer = await window.farm.call('user:signed');
   const now = Boolean(answer.ok && answer.data.signedIn);
   if (now !== S.signedIn) {
@@ -597,7 +599,6 @@ async function start() {
     return;
   }
   S.state = answer.data;
-  if (S.state.jobs.config.url) S.wizard = 'login';
   window.farm.on('state', (state) => { S.state = state; render(); });
   window.farm.on('jobs', (jobs) => { S.state.jobs = jobs; render(); });
   window.farm.on('devices', (data) => { absorb(data); render(); });

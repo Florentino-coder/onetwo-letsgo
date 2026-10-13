@@ -453,6 +453,80 @@ test('parseWithdrawRow reads a withdrawal row of the back office table', () => {
   assert.equal(logic.parseWithdrawRow(undefined), null);
 });
 
+test('withdrawFromApi gives the row and the key that the page gives', () => {
+  const item = {
+    id: '00000000-0000-4000-8000-000000000000', username: '0812345678', bank_type: 'BANK', bank_no: '1234567890',
+    member_bank_display: 'ธนาคารไทยพาณิชย์', first_name: 'นาย ทดสอบ', last_name: 'ระบบ', approve_status: 'approve', success_datetime: null,
+    withdrawal_amount: 1250, total_amount: 1250, is_withdraw_partial: 0,
+    withdraw_datetime: '2026-10-10T22:41:07.000Z', approve_datetime: '2026-10-10T22:42:30.000Z',
+  };
+  const cells = [
+    'ยูชเซอร์เนม : 0812345678\nชื่อธนาคาร : ธนาคารไทยพาณิชย์\nชื่อบัญชีธนาคาร : นาย ทดสอบ ระบบ\nเลขบัญชีธนาคาร : 123-4-56789-0',
+    'จำนวนเงิน :\n1,250.00THB', 'ถอน :\n11/10/2026 05:41:07\nอนุมัติ :\n11/10/2026 05:42:30',
+  ];
+  const fromApi = logic.withdrawFromApi(item);
+  const { id, ...fromApiRow } = fromApi;
+  assert.deepEqual(fromApiRow, logic.parseWithdrawRow(cells));
+  // The id is kept apart from the page's fields, so the row can be closed by request.
+  assert.equal(id, '00000000-0000-4000-8000-000000000000');
+  assert.equal(logic.withdrawFromApi({ ...item, id: 'not an id' }).id, null);
+  // The day turns over in Thai time, not in the request's.
+  assert.equal(logic.withdrawFromApi({ ...item, withdraw_datetime: '2026-12-31T17:00:05.000Z' }).requested, '01/01/2027 00:00:05');
+  // Rows that are not a plain, open withdrawal to a bank account.
+  assert.equal(logic.withdrawFromApi({ ...item, bank_type: 'CRYPTO' }), null);
+  assert.equal(logic.withdrawFromApi({ ...item, approve_status: 'pending' }), null);
+  assert.equal(logic.withdrawFromApi({ ...item, success_datetime: '2026-10-10T22:50:00.000Z' }), null);
+  assert.equal(logic.withdrawFromApi({ ...item, total_amount: 1240 }), null);
+  assert.equal(logic.withdrawFromApi({ ...item, is_withdraw_partial: 1 }), null);
+  assert.equal(logic.withdrawFromApi({ ...item, withdraw_datetime: '' }), null);
+  assert.equal(logic.withdrawFromApi(null), null);
+});
+
+test('settlementFromApi reads one of the shop\'s paying accounts', () => {
+  const item = {
+    id: '43b88cce-5fdc-414a-8b98-075807612df1', settlement_account_id: '43b88cce-5fdc-414a-8b98-075807612df1',
+    bank_no: '5240274547', bank_code: 'BBL', bank_name_display: 'ธนาคารกรุงเทพ', settlement_acc_name: 'นาย ก', balance: 9609, is_active: true,
+  };
+  assert.deepEqual(logic.settlementFromApi(item), {
+    account: '5240274547', id: '43b88cce-5fdc-414a-8b98-075807612df1', holder: 'นาย ก', bank: 'ธนาคารกรุงเทพ', bankCode: 'BBL', balance: 9609, on: true,
+  });
+  assert.equal(logic.settlementFromApi({ ...item, is_active: false }).on, false);
+  assert.equal(logic.settlementFromApi({ ...item, is_active: 1 }).on, true);
+  // The withdrawal-settlement-search shape: id is the settlement account id, bank name is nested.
+  assert.deepEqual(logic.settlementFromApi({
+    id: '814271bf-f364-4f34-a1d7-a9615bb4842d', bank_no: '0989522651', balance: 9092, is_active: 1,
+    settlement_acc_name: 'นาย ข', bank_information: { bank_name_display: 'ธนาคารกรุงเทพ', bank_code: 'BBL' },
+  }), {
+    account: '0989522651', id: '814271bf-f364-4f34-a1d7-a9615bb4842d', holder: 'นาย ข', bank: 'ธนาคารกรุงเทพ', bankCode: 'BBL', balance: 9092, on: true,
+  });
+  assert.equal(logic.settlementFromApi({ ...item, bank_no: '' }), null);
+  assert.equal(logic.settlementFromApi({ ...item, settlement_account_id: '', id: '' }), null);
+  assert.equal(logic.settlementFromApi(null), null);
+});
+
+test('apiClosePath and closeApproveBody build the close request; closeApproved reads the answer', () => {
+  const id = '060a8459-b13d-4898-bcc1-f3d6cfa89b7e';
+  const settlement = '814271bf-f364-4f34-a1d7-a9615bb4842d';
+  assert.equal(logic.apiClosePath(id), `/bo/withdrawal-approve/${id}`);
+  assert.throws(() => logic.apiClosePath('nope'), /is not a withdrawal id/);
+  assert.deepEqual(logic.closeApproveBody(settlement), {
+    approve_tran_remark: '', settlement_account_id: settlement, transfer_already: true, withdraw_state: 'APPROVE', withdraw_status: 'success',
+  });
+  assert.throws(() => logic.closeApproveBody(''), /settlement account id is needed/);
+  assert.equal(logic.closeApproved({ withdraw_status: 'success', success_datetime: '2026-10-12T23:34:13.000Z' }), true);
+  assert.equal(logic.closeApproved({ withdraw_status: 'success', success_datetime: null }), false);
+  assert.equal(logic.closeApproved({ withdraw_status: 'pending', success_datetime: '2026-10-12T23:34:13.000Z' }), false);
+  assert.equal(logic.closeApproved(null), false);
+});
+
+test('settlementTogglePath and settlementToggleBody build the on/off request', () => {
+  const id = 'dee51691-cbee-4d4e-b685-be31b9aa186a';
+  assert.equal(logic.settlementTogglePath(id), `/bo/withdrawal-settlement/${id}`);
+  assert.throws(() => logic.settlementTogglePath('nope'), /is not a settlement account id/);
+  assert.deepEqual(logic.settlementToggleBody(true), { is_active: 1 });
+  assert.deepEqual(logic.settlementToggleBody(false), { is_active: 0 });
+});
+
 test('a slip whose hidden digits were recognized as percent signs still reads', () => {
   const text = ['Bangkok Bank', 'รายการสําเร็จ', 'จํานวนเงิน', '2,002.00 THB', 'จาก   นาย ร้าน', '324-0-xxx718', 'ธนาคารกรุงเทพ', 'ไปที่   นาย ผู้รับ', '123-4-%%%890', 'ธนาคารกสิกรไทย', 'ค่าธรรมเนียม 0.00 THB'].join('\n');
   const slip = logic.parseSlip(text);

@@ -591,7 +591,100 @@ function parseWithdrawRow(cells) {
   return { ...row, key: [row.account, Number(row.amount).toFixed(2), row.requested].join('|') };
 }
 
-const SETTLEMENT_LABELS = { holder: ['ชื่อบัญชี'], account: ['หมายเลขบัญชี'] };
+// A time from the back office's own request, as its page shows it: Thai time, day first.
+function thaiTime(iso) {
+  const at = Date.parse(String(iso || ''));
+  if (!Number.isFinite(at)) return '';
+  const date = new Date(at + 7 * 3600 * 1000);
+  const two = (number) => String(number).padStart(2, '0');
+  return `${two(date.getUTCDate())}/${two(date.getUTCMonth() + 1)}/${date.getUTCFullYear()} ${two(date.getUTCHours())}:${two(date.getUTCMinutes())}:${two(date.getUTCSeconds())}`;
+}
+
+/**
+ * One withdrawal as the back office's own list request gives it, in the shape and with the `key`
+ * that parseWithdrawRow gives for the same row of the page. Null when it is not an approved
+ * withdrawal to a bank account that is still open, or when what is paid is not the amount asked
+ * for (a fee, a tax or a part payment): such a row is left to the page.
+ */
+function withdrawFromApi(item) {
+  if (!item || typeof item !== 'object') return null;
+  if (item.bank_type !== 'BANK' || item.approve_status !== 'approve' || item.success_datetime) return null;
+  const account = String(item.bank_no || '').replace(/[\s-]/g, '');
+  const value = Number(item.withdrawal_amount);
+  if (!/^\d{6,20}$/.test(account) || !(value > 0)) return null;
+  if (Number(item.total_amount) !== value || Number(item.is_withdraw_partial)) return null;
+  const requested = thaiTime(item.withdraw_datetime);
+  if (!requested) return null;
+  const row = {
+    user: String(item.username || ''),
+    bank: String(item.member_bank_display || '').trim(),
+    holder: [item.first_name, item.last_name].map((name) => String(name || '').trim()).filter(Boolean).join(' '),
+    account,
+    amount: value.toFixed(2),
+    requested,
+    approved: thaiTime(item.approve_datetime),
+  };
+  // The row's own id, kept apart from the fields the page also gives, so a row read by request can
+  // be closed by request. Null when the id is not a plain identifier.
+  const id = /^[0-9a-f-]{16,64}$/i.test(String(item.id || '')) ? String(item.id) : null;
+  return { ...row, id, key: [row.account, row.amount, row.requested].join('|') };
+}
+
+/**
+ * One of the shop's settlement (paying) accounts, from a row of the back office's own
+ * all-settlement-balance request: the account number, its id for closing, what is left in it, and
+ * whether it is switched on. Null when the row is not a bank account with an id.
+ */
+function settlementFromApi(item) {
+  if (!item || typeof item !== 'object') return null;
+  const account = String(item.bank_no || '').replace(/[\s-]/g, '');
+  const id = String(item.settlement_account_id || item.id || '');
+  if (!/^\d{6,20}$/.test(account) || !/^[0-9a-f-]{16,64}$/i.test(id)) return null;
+  // The bank's name sits either at the top level or inside bank_information, by the request.
+  const info = item.bank_information && typeof item.bank_information === 'object' ? item.bank_information : {};
+  return {
+    account,
+    id,
+    holder: String(item.settlement_acc_name || '').trim(),
+    bank: String(item.bank_name_display || info.bank_name_display || '').trim(),
+    bankCode: String(item.bank_code || info.bank_code || '').trim(),
+    balance: Number.isFinite(Number(item.balance)) ? Number(item.balance) : null,
+    on: Boolean(item.is_active),
+  };
+}
+
+// The address of the back office's own request that closes one approved withdrawal.
+function apiClosePath(id) {
+  if (!/^[0-9a-f-]{16,64}$/i.test(String(id || ''))) throw new Error(`"${id}" is not a withdrawal id.`);
+  return `/bo/withdrawal-approve/${encodeURIComponent(id)}`;
+}
+
+/**
+ * The body of that request: close the withdrawal as paid from this settlement account. The same
+ * five fields the back office's own form sends, so the service sees no difference.
+ */
+function closeApproveBody(settlementId) {
+  if (!/^[0-9a-f-]{16,64}$/i.test(String(settlementId || ''))) throw new Error('A settlement account id is needed to close a withdrawal.');
+  return { approve_tran_remark: '', settlement_account_id: String(settlementId), transfer_already: true, withdraw_state: 'APPROVE', withdraw_status: 'success' };
+}
+
+/** Whether the service's answer to a close request says the withdrawal is now paid. */
+function closeApproved(answer) {
+  return Boolean(answer && typeof answer === 'object' && answer.withdraw_status === 'success' && answer.success_datetime);
+}
+
+// The address of the request that switches one of the shop's paying accounts on or off.
+function settlementTogglePath(id) {
+  if (!/^[0-9a-f-]{16,64}$/i.test(String(id || ''))) throw new Error(`"${id}" is not a settlement account id.`);
+  return `/bo/withdrawal-settlement/${encodeURIComponent(id)}`;
+}
+
+/** The body of that request: switch the account on (1) or off (0), the one field the form sends. */
+function settlementToggleBody(on) {
+  return { is_active: on ? 1 : 0 };
+}
+
+const SETTLEMENT_LABELS ={ holder: ['ชื่อบัญชี'], account: ['หมายเลขบัญชี'] };
 
 /**
  * One row of the back office's list of the shop's own accounts, from the text of its cells and
@@ -916,6 +1009,13 @@ module.exports = {
   findUiText,
   maskAgrees,
   parseWithdrawRow,
+  withdrawFromApi,
+  settlementFromApi,
+  apiClosePath,
+  closeApproveBody,
+  closeApproved,
+  settlementTogglePath,
+  settlementToggleBody,
   parseSettlementRow,
   normalizePolicy,
   checkPolicy,

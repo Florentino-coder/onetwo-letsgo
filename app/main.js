@@ -73,9 +73,13 @@ const store = new Store(baseDir);
 const ownerKey = () => fs.readFileSync((!app.isPackaged && process.env.ONETWO_OWNER_KEY) || path.join(__dirname, 'update-public.pem'), 'utf8');
 
 // ── the user program: work pack and activation ──────────────────────────
+// Activation is skipped for now while the link-mode user program is tried. Flip back to false to
+// require an activation code again before release.
+const SKIP_LICENSE = true;
+
 // The user program has no workflows of its own. It runs from a signed pack, and the settings a
-// pack does not bring are fixed here: jobs are closed for real, by the back office's own form.
-const USER_JOB_FIXED = { closeBy: 'profile', closeDry: false, verify: true, source: 'gallery', watch: true, balances: true };
+// pack does not bring are fixed here: jobs are read and closed by the back office's own requests.
+const USER_JOB_FIXED = { api: true, closeBy: 'profile', closeDry: false, verify: true, source: 'gallery', watch: false, balances: true };
 const packs = USER ? createPackStore({ dir: path.join(baseDir, 'packs'), bundled: path.join(__dirname, 'packs', 'default.onetwopack'), publicKey: ownerKey(), appVersion: VERSION }) : null;
 let packInUse = null;
 
@@ -235,7 +239,25 @@ const jobs = createJobs({
   readScreen: (serial) => readScreen(serial),
   readSlip: (serial, since) => readSlip(serial, since),
   phoneClock: (serial) => requireAdb().clock(serial),
-  phones: () => [...devices.values()].filter((device) => device.status === 'device' && deviceMeta(device.serial).pay_on !== false).map((device) => ({ serial: device.serial, label: deviceLabel(device), ...amountRange(device.serial), ...payAccount(device.serial) })),
+  phones: () => [...devices.values()].filter((device) => device.status === 'device' && deviceMeta(device.serial).pay_on !== false).map((device) => ({ serial: device.serial, label: deviceLabel(device), since: device.onlineSince || 0, ...amountRange(device.serial), ...payAccount(device.serial) })),
+  // Every online phone that has an account, switched on or not, with when it came online.
+  watched: () => [...devices.values()].filter((device) => device.status === 'device' && payAccount(device.serial).account).map((device) => ({ serial: device.serial, account: payAccount(device.serial).account, since: device.onlineSince || 0 })),
+  // The back office says which accounts are on: every phone stands the way its account stands there.
+  accountStates: (map) => {
+    let changed = false;
+    for (const serial of Object.keys(store.state.devices)) {
+      const listed = map[payAccount(serial).account];
+      if (!listed || typeof listed.on !== 'boolean' || (deviceMeta(serial).pay_on !== false) === listed.on) continue;
+      store.state.devices[serial] = { ...deviceMeta(serial), pay_on: listed.on };
+      log(`${serial} ${listed.on ? 'takes' : 'no longer takes'} withdrawals: its account is switched ${listed.on ? 'on' : 'off'} in the back office.`, 'info', serial);
+      changed = true;
+    }
+    if (!changed) return;
+    store.saveState();
+    send('devices', { devices: devicesSnapshot(), scannedAt: Date.now() });
+  },
+  // The amount range of every phone that has one, online or not, switched on or not.
+  ranges: () => Object.keys(store.state.devices).map(amountRange).filter((range) => range.min !== null),
   // Money left the phone's account: keep the balance the operator entered in step.
   spend: (serial, amount) => {
     const { balance } = payAccount(serial);
@@ -430,7 +452,9 @@ async function scan() {
         log(`Status changed for ${deviceLabel(device)}: ${previous.status} -> ${device.status}.`, 'info', device.serial);
         if (previous.status === 'device') noteDrop(device.serial, deviceLabel(device));
       }
-      next.set(device.serial, { ...device, lastSeen: now });
+      // When the phone came online this time: its account is checked afresh from then on.
+      const onlineSince = device.status !== 'device' ? 0 : previous && previous.status === 'device' ? previous.onlineSince : now;
+      next.set(device.serial, { ...device, lastSeen: now, onlineSince });
     }
     for (const [serial, previous] of devices) {
       if (!next.has(serial)) {
@@ -441,6 +465,8 @@ async function scan() {
     devices = next;
     evaluateHealth(list);
     send('devices', { devices: devicesSnapshot(), scannedAt: now });
+    // A phone that has just come online is being checked: say so at once, not at the next turn.
+    if ([...next.values()].some((device) => device.onlineSince === now)) send('jobs', jobs.view());
   } catch (error) {
     log(`ERROR: ${error.message}`, 'error');
   } finally {
@@ -1170,7 +1196,7 @@ async function syncChannel() {
 
 /** A copy whose code stopped being good pays nothing more by itself. */
 function enforceLicense() {
-  if (!USER || licenseState().ok || !jobs.view().payAuto) return;
+  if (!USER || SKIP_LICENSE || licenseState().ok || !jobs.view().payAuto) return;
   jobs.setPayAuto(false);
   log('Automatic mode was switched off: the activation code is no longer good.', 'error');
   if (Notification.isSupported()) new Notification({ title: APP_NAME, body: 'รหัสเปิดใช้ใช้ไม่ได้แล้ว หยุดจ่ายอัตโนมัติ' }).show();
@@ -1227,22 +1253,23 @@ function publicState() {
 // What the user program's window may ask for. Everything else belongs to the studio.
 const USER_CALLS = new Set([
   'state:get', 'devices:scan', 'adb:restart', 'device:meta', 'device:pin', 'device:pin-show', 'device:range', 'device:pay', 'device:account',
-  'jobs:set', 'jobs:open', 'jobs:orders', 'jobs:pay', 'jobs:payauto', 'jobs:unhalt', 'jobs:resolve',
+  'jobs:set', 'jobs:apitoken', 'jobs:open', 'jobs:orders', 'jobs:pay', 'jobs:payauto', 'jobs:unhalt', 'jobs:resolve',
   'folder:open', 'update:check', 'update:restart',
   'license:set', 'pack:import', 'pack:rollback', 'user:setup', 'user:signed',
   'slip:view', 'history:search', 'report:save', 'telegram:set', 'telegram:test', 'user:prefs',
 ]);
 // And of those, what it may ask for before it is activated.
 const UNLICENSED_CALLS = new Set(['state:get', 'license:set', 'update:check', 'update:restart', 'folder:open']);
-// The settings of a job the user program's window may change; the rest come from the pack.
-const USER_JOB_KEYS = ['url', 'filter'];
+// The settings of a job the user program may change; the rest come from the pack. The link
+// addresses stay on this computer, like the back-office link, and are set once at first run.
+const USER_JOB_KEYS = ['url', 'filter', 'apiBase', 'apiOrigin', 'apiSettlementPath'];
 
 function handle(channel, handler) {
   ipcMain.handle(channel, async (_event, payload) => {
     try {
       if (USER) {
         if (!USER_CALLS.has(channel)) throw new Error('This program does not do that.');
-        if (!UNLICENSED_CALLS.has(channel) && !licenseState().ok) throw new Error('This program is not activated.');
+        if (!SKIP_LICENSE && !UNLICENSED_CALLS.has(channel) && !licenseState().ok) throw new Error('This program is not activated.');
         if (channel === 'jobs:set') payload = Object.fromEntries(USER_JOB_KEYS.filter((key) => payload && key in payload).map((key) => [key, payload[key]]));
       }
       return { ok: true, data: await handler(payload || {}) };
@@ -1698,6 +1725,7 @@ function registerIpc() {
   });
 
   handle('jobs:set', (patch) => jobs.save(patch));
+  handle('jobs:apitoken', ({ token }) => jobs.setApiToken(token));
   handle('jobs:open', () => jobs.open());
   handle('jobs:pick', ({ field }) => jobs.pick(field));
   handle('jobs:record', ({ on, field }) => jobs.record(Boolean(on), field));

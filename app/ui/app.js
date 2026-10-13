@@ -1652,7 +1652,7 @@ const VIEWS = {
     const row = (order) => {
       const stopped = (halt && halt.key === order.key) || Object.values(stops).some((each) => each.key === order.key);
       const onPhone = Object.entries(paying).find(([, each]) => each.key === order.key);
-      const label = stopped ? 'หยุด: ต้องตรวจด้วยมือ' : onPhone ? PHONE_STATE[onPhone[1].state] || 'กำลังทำงาน' : WITHDRAW_STATE[order.state] || (order.serial ? 'รอทำ' : order.short === 'cap' ? 'เครื่องถึงเพดานวันนี้' : order.short === 'balance' ? 'ยอดคงเหลือของเครื่องไม่พอ' : order.short === 'off' ? 'บัญชีของเครื่องปิดอยู่ในหลังบ้าน' : order.short === 'stopped' ? 'เครื่องหยุดอยู่ รอรีเซ็ต' : 'ไม่มีเครื่องรับยอดนี้');
+      const label = stopped ? 'หยุด: ต้องตรวจด้วยมือ' : onPhone ? PHONE_STATE[onPhone[1].state] || 'กำลังทำงาน' : WITHDRAW_STATE[order.state] || (order.serial ? 'รอทำ' : order.short === 'cap' ? 'เครื่องถึงเพดานวันนี้' : order.short === 'balance' ? 'ยอดคงเหลือของเครื่องไม่พอ' : order.short === 'off' ? 'บัญชีของเครื่องปิดอยู่ในหลังบ้าน' : order.short === 'stopped' ? 'เครื่องหยุดอยู่ รอรีเซ็ต' : order.short === 'checking' ? 'กำลังตรวจสอบเครื่อง' : order.short === 'missing' ? 'ไม่พบบัญชีของเครื่องในหลังบ้าน' : 'ไม่มีเครื่องรับยอดนี้');
       return h('tr', { class: stopped || bad(order) ? 'bad' : order.state === 'done' ? 'good' : '' },
         h('td', { class: 'mono num' }, baht(order.amount)),
         h('td', null, h('div', null, order.bank), h('div', { class: 'mono muted' }, order.account)),
@@ -1729,6 +1729,27 @@ const VIEWS = {
         toggle('ใส่ช่วงยอดของเครื่องลงช่องกรองของหน้าเว็บ', config.filter, (checked) => set({ filter: checked })),
         toggle('อ่านยอดคงเหลือและสถานะบัญชีจากหน้า "ปรับยอดเงินบัญชีถอน" (หน้าต่างซ่อน กดค้นหาเองทุก 30 วินาที)', config.balances, (checked) => set({ balances: checked })),
         h('div', { class: 'muted' }, `บัญชีของร้าน: ${WITHDRAW_ACCOUNTS[jobs.accounts.note] || jobs.accounts.note}${jobs.accounts.at ? ` · ${timeOf(jobs.accounts.at)} · ${Object.keys(jobs.accounts.map).length} บัญชี` : ''}${jobs.accounts.error ? ` · ${jobs.accounts.error}` : ''}`),
+        toggle('อ่านและปิดงานผ่านลิงก์ของหลังบ้านโดยตรง ด้วยพาส ไม่ต้องเปิด/ล็อกอินหน้าต่างหลังบ้าน', config.api, (checked) => set({ api: checked })),
+        config.api && field('ที่อยู่บริการของหลังบ้าน (จากแท็บ Network ใน F12 ขึ้นต้น https://)',
+          h('input', { class: 'field mono', value: config.apiBase, placeholder: 'https://....api.example.com', onchange: (event) => set({ apiBase: event.target.value }) })),
+        config.api && field('ที่อยู่หน้าเว็บหลังบ้าน (ช่อง origin/referer ใน F12 ขึ้นต้น https://)',
+          h('input', { class: 'field mono', value: config.apiOrigin, placeholder: 'https://manage.example.com', onchange: (event) => set({ apiOrigin: event.target.value }) })),
+        config.api && field('ลิงก์รายการบัญชีจ่าย (ใช้หายอดและบัญชีตอนปิดงาน แก้เมื่อหลังบ้านใช้ลิงก์อื่น)',
+          h('input', { class: 'field mono', value: config.apiSettlementPath, placeholder: '/bo/all-settlement-balance?is_all=true', onchange: (event) => set({ apiSettlementPath: event.target.value }) })),
+        config.api && h('div', { class: 'job-field' },
+          h('div', { class: 'grow' },
+            h('div', null, 'พาส (Bearer token) สำหรับอ่านรายการผ่านลิงก์'),
+            h('div', { class: 'mono muted' }, 'เก็บในหน่วยความจำเท่านั้น ไม่บันทึกลงไฟล์ หายเมื่อปิดหน้าต่างหลังบ้าน ต้องวางใหม่เมื่อหมดอายุ'),
+            h('input', {
+              type: 'password', class: 'field mono',
+              placeholder: jobs.api && jobs.api.pass ? 'ใส่พาสไว้แล้ว — วางใหม่เพื่อเปลี่ยน' : 'วางพาสจาก F12 (ช่อง authorization ตัดคำว่า Bearer ออกก็ได้)',
+              onchange: async (event) => { await apply(() => call('jobs:apitoken', { token: event.target.value })); event.target.value = ''; },
+            })),
+          jobs.api && jobs.api.pass && h('button', { class: 'btn', onclick: () => apply(() => call('jobs:apitoken', { token: '' })) }, 'ล้างพาส')),
+        config.api && h('div', { class: jobs.api && jobs.api.wrong ? 'muted bad' : 'muted' },
+          jobs.api && jobs.api.wrong ? 'กุญแจรายการจากลิงก์ไม่ตรงกับหน้าเว็บ ปิดไว้จนกว่าจะเปิดหลังบ้านใหม่ ใช้รายการจากหน้าเว็บแทน'
+            : !(jobs.api && jobs.api.pass) ? 'ยังไม่มีพาส วางพาสก่อน แล้วจะอ่านและปิดงานผ่านลิงก์ได้โดยไม่ต้องเปิดหน้าต่างหลังบ้าน'
+            : `มีพาสแล้ว อ่านรายการ: ${jobs.orders.via === 'request' ? 'ผ่านลิงก์' : 'หน้าเว็บ'}${config.closeDry ? ' · โหมดทดลองเปิดอยู่: จะไม่ยิงปิดงานจริง แค่บอกว่าจะปิด id ไหน' : ' · โหมดจริง: กดจ่ายจะปิดงานผ่านลิงก์'}`),
       ],
     };
 

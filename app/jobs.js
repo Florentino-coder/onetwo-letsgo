@@ -9,7 +9,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { BrowserWindow } = require('electron');
+const { BrowserWindow, net } = require('electron');
 const logic = require('./core/logic');
 
 const DEFAULTS = {
@@ -64,6 +64,18 @@ const DEFAULTS = {
   // Read each phone's account off the back office's own list of the shop's accounts: what is left
   // in it and whether it is switched on. Off means the balance entered by hand is used.
   balances: true,
+  // Read the list of approved withdrawals by the back office's own request, not off the page's
+  // table. The page is still searched as before: jobs are closed on it.
+  api: false,
+  // Where that request goes: the service's address ("https://...api.example.com"), as the F12
+  // network tab shows it. The pass itself is typed in each time and kept in memory only.
+  apiBase: '',
+  // The back office web page's own address ("https://manage.example.com"), sent as the request's
+  // origin and referer, as the F12 network tab shows them. Some services refuse a request without it.
+  apiOrigin: '',
+  // The path of the request that lists the shop's paying accounts with their balances, used to
+  // close a job by request (it names the paying account) and to read balances without a window.
+  apiSettlementPath: '/bo/withdrawal-settlement-search?%24limit=100&%24skip=0',
   interval: 5,
   reload: false,
 };
@@ -169,6 +181,73 @@ const ORDERS_SCRIPT = `(() => {
     rows: table ? [...table.querySelectorAll('tbody tr')].map((tr) => [...tr.children].map((td) => td.innerText)) : [],
   };
 })()`;
+
+// The back office's own request for the list of approved withdrawals, as its page sends it.
+const API_LIST_PATH = '/bo/withdrawal-approve-search';
+const API_PAGE = 50;
+const API_MAX_PAGES = 4;
+
+/** The address of that request: today in Thai time, the amount range when there is one, newest first. */
+function apiListUrl(base, range, skip) {
+  const day = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+  const query = [
+    ['$skip', skip], ['$limit', API_PAGE], ['username', ''], ['start_date', `${day} 00:00:00`], ['end_date', `${day} 23:59:59`],
+    ['member_account', ''], ['member_crypto_token', ''], ['bank_information_id', ''], ['member_bank_account', ''],
+    ['approve_start_date', ''], ['approve_end_date', ''], ['amount_from', range ? range[0] : ''], ['amount_to', range ? range[1] : ''],
+    ['p', 1 + skip / API_PAGE], ['auto_reload', 'false'], ['tab', 1], ['$sort', '{"withdraw_datetime":"desc"}'],
+  ];
+  // Only the service's origin is used, so a whole request URL pasted into the setting still works.
+  return `${new URL(base).origin}${API_LIST_PATH}?${query.map(([name, value]) => `${encodeURIComponent(name)}=${encodeURIComponent(value)}`).join('&')}`;
+}
+
+// How long one request to the service is waited for before it is given up.
+const API_TIMEOUT_MS = 20000;
+
+/**
+ * One request to the back office's own service, from this process, carrying the pass the operator
+ * typed in. Returns the status and the parsed body. The pass is passed in, never read from a page
+ * or kept anywhere but memory. `method` other than GET sends `body` as JSON.
+ */
+const API_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36';
+
+async function apiRequest(method, url, pass, { body, origin } = {}) {
+  const request = net.request({ method, url });
+  request.setHeader('accept', 'application/json, text/plain, */*');
+  request.setHeader('authorization', `Bearer ${pass}`);
+  request.setHeader('correlationid', crypto.randomUUID());
+  request.setHeader('languagecode', 'th');
+  request.setHeader('user-agent', API_USER_AGENT);
+  // Some services read the web page's origin and refuse, or fail, a request that does not carry it.
+  if (origin) {
+    request.setHeader('origin', origin);
+    request.setHeader('referer', `${origin}/`);
+  }
+  if (body !== undefined) request.setHeader('content-type', 'application/json;charset=UTF-8');
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { request.abort(); reject(new Error('the service did not answer in time')); }, API_TIMEOUT_MS);
+    request.on('response', (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => {
+        clearTimeout(timer);
+        const text = Buffer.concat(chunks).toString('utf8');
+        let parsed = null;
+        try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
+        resolve({ status: response.statusCode, body: parsed, text });
+      });
+    });
+    request.on('error', (error) => { clearTimeout(timer); reject(error); });
+    if (body !== undefined) request.write(JSON.stringify(body));
+    request.end();
+  });
+}
+
+/** One page of the approved-withdrawal list: its status, how many rows there are in all, and the rows. */
+async function apiListPage(base, pass, range, skip, origin) {
+  const url = apiListUrl(base, range, skip);
+  const { status, body, text } = await apiRequest('GET', url, pass, { origin });
+  return { status, total: Number(body && body.total) || 0, data: body && Array.isArray(body.data) ? body.data : null, text, url };
+}
 
 /**
  * Put an amount range into the page's own filter, when one is given and the profile says where the
@@ -515,13 +594,18 @@ function createJobs(host) {
       profile: (profileFor(window ? window.webContents.getURL() : config().url) || { profile_id: '' }).profile_id,
       // Which recording is in progress and how many clicks it has, or null.
       recording: recording ? { which: recording.which, count: recording.steps.length } : null,
-      orders: { ...ordersView(), error: orders.error || '' },
+      orders: { ...ordersView(), error: orders.error || '', via: orders.via || 'page' },
+      // Reading the list by the back office's own request: whether a pass is held, and whether a
+      // row has been seen to agree with the page. The pass itself never leaves this process.
+      api: { pass: Boolean(apiPass), proven: apiProven, wrong: apiWrong },
       payAuto,
       halt: halted(),
       // The phones that are stopped, and the phones that are paying or resting now, by serial.
       stops: stops(),
       paying: Object.fromEntries(paying),
       phones: host.phones().map((phone) => ({ ...phone, spent: spentToday(phone.serial) })),
+      // The phones whose account has not been read from the back office since they came online.
+      checking: host.watched().filter(checking).map((phone) => phone.serial),
       // The shop's accounts as the back office lists them, by account number.
       accounts: { at: accounts.at, note: accounts.note, error: accounts.error || '', fresh: accounts.note === 'ok' && Date.now() - accounts.at <= ACCOUNTS_FRESH_MS, map: accounts.map },
       // What each phone began to pay today, online or not.
@@ -552,6 +636,21 @@ function createJobs(host) {
     host.store.config.jobs = next;
     host.store.saveConfig();
     if (auto) schedule();
+    return view();
+  }
+
+  /**
+   * Keep the pass for the list request, in memory only, for as long as the back office stays open.
+   * A new pass lets the request be tried again after it was refused. Empty clears it.
+   */
+  function setApiToken(token) {
+    apiPass = String(token || '').replace(/^\s*Bearer\s+/i, '').trim();
+    apiWrong = false;
+    apiSaid = '';
+    // A pass with no window set up starts the turn; losing the pass with no window stops it.
+    if (apiReadable(config()) && !window && !payTimer) startWatching();
+    else if (!apiPass && !window) stopWatching();
+    publish();
     return view();
   }
 
@@ -597,9 +696,14 @@ function createJobs(host) {
     window.on('closed', () => {
       window = null;
       recording = null;
+      // The page cross-check is gone with the window; the pass stays, so reading by request goes on.
+      apiProven = false;
+      apiWrong = false;
       stopAuto();
       stopWatching();
-      setStatus('closed');
+      // With reading by request set up, keep the turn running without the window.
+      if (apiReadable(config())) startWatching();
+      else setStatus('closed');
     });
     window.loadURL(url);
     startWatching();
@@ -962,6 +1066,13 @@ function createJobs(host) {
   let payTimer = null;
   let lastSearch = 0;
   let lastOpened = 0;
+  // Reading the list by request: the pass the operator typed in (kept in memory only, never on
+  // disk, cleared when the back office is closed), whether a row was seen to get the same key by
+  // request as off the page, whether one was seen to get another, and the last thing said of it.
+  let apiPass = '';
+  let apiProven = false;
+  let apiWrong = false;
+  let apiSaid = '';
 
   function audit(event, key, detail = {}) {
     const entry = { at: new Date().toISOString(), event, key: key || '', ...detail };
@@ -1143,11 +1254,72 @@ function createJobs(host) {
     accounts = { at, note: 'ok', map };
   }
 
+  // When the shop's paying accounts were last read by request, so they are not asked for too often.
+  let lastApiAccounts = 0;
+
+  /**
+   * Read the shop's paying accounts by the back office's own request: each account number, its id
+   * for closing, what is left in it, and whether it is on. Fills the same map the page fills, so
+   * everything that reads balances and account state works the same. Needs no window.
+   */
+  async function readApiAccounts(force = false) {
+    const current = config();
+    if (!apiReadable(current) || !current.apiSettlementPath) return;
+    const at = Date.now();
+    if (!force && at - lastApiAccounts < MIN_ACCOUNTS_MS) return;
+    lastApiAccounts = at;
+    try {
+      const { status, body, text } = await apiRequest('GET', new URL(current.apiSettlementPath, current.apiBase).href, apiPass, { origin: current.apiOrigin });
+      if (status === 401 || status === 403) {
+        apiPass = '';
+        apiSay(`Reading the shop's accounts by request stopped: the pass was refused (${status}). Type it in again.`, 'error');
+        accounts = { at, note: 'signedOut', map: {} };
+        return;
+      }
+      if (status !== 200) throw new Error(`the service answered ${status}${text ? ` (${String(text).replace(/\s+/g, ' ').slice(0, 200)})` : ''}`);
+      const rows = Array.isArray(body) ? body : (body && Array.isArray(body.data) ? body.data : []);
+      const map = {};
+      for (const row of rows) {
+        const account = logic.settlementFromApi(row);
+        // An account listed twice cannot be told apart, so neither listing is used.
+        if (account) map[account.account] = account.account in map ? null : account;
+      }
+      for (const key of Object.keys(map)) if (!map[key]) delete map[key];
+      accounts = { at, note: 'ok', map };
+    } catch (error) {
+      accounts = { at, note: 'error', map: accounts.map, error: error.message };
+    }
+  }
+
+  /**
+   * Close one approved withdrawal by the back office's own request: find the paying account by the
+   * phone's own account number, then mark the withdrawal paid from it. Trial mode only outlines it.
+   * Throws when the paying account is not found, is off, or the service does not agree.
+   */
+  async function closeByApi(current, order, phone, key) {
+    if (!order.id) throw new Error('The workflow ran, but the withdrawal has no id read by request, so it cannot be closed by request. The job was left open.');
+    await readApiAccounts(true);
+    const payFrom = accounts.map[phone.account];
+    if (!payFrom || payFrom.account !== phone.account) throw new Error(`The workflow ran, but the paying account ${phone.account} is not in the shop's accounts read by request, so the job was left open.`);
+    if (payFrom.on === false) throw new Error(`The workflow ran, but the paying account ${phone.account} is switched off in the back office, so the job was left open.`);
+    if (current.closeDry) throw new Error(`Trial mode: withdrawal ${order.id} would be closed as paid from ${phone.account} (${payFrom.id}). Nothing was sent and the job was left open.`);
+    const began = Date.now();
+    const { status, body } = await apiRequest('PATCH', new URL(logic.apiClosePath(order.id), current.apiBase).href, apiPass, { body: logic.closeApproveBody(payFrom.id), origin: current.apiOrigin });
+    audit('close', key, { ms: Date.now() - began, message: `by request · ${((Date.now() - began) / 1000).toFixed(1)}s · ${status}` });
+    if (status === 401 || status === 403) {
+      apiPass = '';
+      throw new Error(`Closing the job by request failed: the pass was refused (${status}). Type it in again, then check the job by hand.`);
+    }
+    if (status !== 200 || !logic.closeApproved(body)) throw new Error(`Closing the job by request failed (the service answered ${status}). Check the job on the page by hand.`);
+    host.log(`Withdrawal ${order.amount} closed by request, paid from ${phone.account}.`);
+  }
+
   // True while an account's switch is being set, so the list is not searched under it.
   let switching = false;
 
-  /** Whether the back-office window is open and signed in. */
+  /** Whether the back office can be reached: by request in link mode, or the signed-in window. */
   async function signedIn() {
+    if (apiReadable(config())) return true;
     if (!window || window.webContents.isLoading()) return false;
     return window.webContents.executeJavaScript('!document.querySelector("input[type=password]") && !/login/i.test(location.pathname)', true).catch(() => false);
   }
@@ -1158,7 +1330,11 @@ function createJobs(host) {
    * not read. Throws when the switch could not be seen to stand that way afterwards.
    */
   async function switchAccount(account, on) {
-    if (!account || !config().balances || !window) return false;
+    if (!account || !config().balances) return false;
+    const current = config();
+    // With the account list read by request, the account is switched by request too: no window needed.
+    if (apiReadable(current)) return switchAccountByApi(current, account, on);
+    if (!window) return false;
     const profile = profileFor(window.webContents.getURL());
     if (!profile || !profile.settlement_page_path) return false;
     if (switching) throw new Error('Another account is being switched in the back office. Try again in a moment.');
@@ -1194,6 +1370,35 @@ function createJobs(host) {
     }
   }
 
+  /**
+   * Switch a phone's account on or off by the back office's own request. Resolves true when the
+   * switch was sent, false when it stood that way already. Throws when the account is not known or
+   * the service does not agree. Needs no window.
+   */
+  async function switchAccountByApi(current, account, on) {
+    if (switching) throw new Error('Another account is being switched. Try again in a moment.');
+    switching = true;
+    try {
+      await readApiAccounts(true);
+      const listed = accounts.map[account];
+      if (!listed) throw new Error(`Account ${account} is not in the shop's accounts read by request, so it was not switched.`);
+      if (listed.on === Boolean(on)) return false;
+      const { status, text } = await apiRequest('PATCH', new URL(logic.settlementTogglePath(listed.id), current.apiBase).href, apiPass, { body: logic.settlementToggleBody(on), origin: current.apiOrigin });
+      if (status === 401 || status === 403) {
+        apiPass = '';
+        throw new Error(`Switching the account failed: the pass was refused (${status}). Type it in again.`);
+      }
+      if (status !== 200) throw new Error(`Switching account ${account} ${on ? 'on' : 'off'} by request failed (the service answered ${status}${text ? ` (${String(text).replace(/\s+/g, ' ').slice(0, 160)})` : ''}).`);
+      if (accounts.map[account]) accounts.map[account].on = Boolean(on);
+      audit(on ? 'account-on' : 'account-off', account, { on: Boolean(on), via: 'request' });
+      host.log(`Account ${account} was switched ${on ? 'on' : 'off'} by request.`);
+      publish();
+      return true;
+    } finally {
+      switching = false;
+    }
+  }
+
   /** What the back office says of a phone's account now, or null when that is not known or not fresh. */
   function accountOf(phone) {
     if (!phone.account || accounts.note !== 'ok' || Date.now() - accounts.at > ACCOUNTS_FRESH_MS) return null;
@@ -1222,13 +1427,6 @@ function createJobs(host) {
     return listed && listed.balance !== null ? listed.balance : phone.balance;
   }
 
-  /** The largest amount a phone can pay now: its range, held down by its balance and what is left of its cap. */
-  function roomOf(phone) {
-    const balance = balanceOf(phone);
-    const left = phone.cap === null ? Infinity : phone.cap - spentToday(phone.serial);
-    return Math.floor(Math.min(phone.max, balance === null ? Infinity : balance, left));
-  }
-
   // Phones already told to be out of money, so each is told once until it has money again.
   const broke = new Set();
 
@@ -1249,9 +1447,38 @@ function createJobs(host) {
     }
   }
 
+  /** Whether the back office's list of the shop's accounts is read at all here: off its page, or by request. */
+  function accountsRead(current) {
+    if (!window) return apiReadable(current) && Boolean(current.apiSettlementPath);
+    if (!current.balances) return false;
+    const profile = profileFor(window.webContents.getURL());
+    return Boolean(profile && profile.settlement_page_path);
+  }
+
+  /**
+   * Whether a phone is still being checked: it came online, and the back office has not been read
+   * since for whether its account is on and what is left in it. It takes no row until then.
+   */
+  function checking(phone) {
+    return Boolean(phone.account) && accounts.at < phone.since && accountsRead(config());
+  }
+
+  /** Whether the back office's list was read just now and a phone's account is not in it. */
+  function unlisted(phone) {
+    return Boolean(phone.account) && accounts.note === 'ok' && Date.now() - accounts.at <= ACCOUNTS_FRESH_MS && !accounts.map[phone.account] && accountsRead(config());
+  }
+
+  /** Make every phone stand the way its account stands in the back office, once that has been read. */
+  function syncPhones() {
+    if (accounts.note === 'ok' && Date.now() - accounts.at <= ACCOUNTS_FRESH_MS) host.accountStates(accounts.map);
+  }
+
   /** Why a phone in range cannot pay this amount now, or '' when it can. */
   function shortOf(phone, value) {
     if (stops()[phone.serial]) return 'stopped';
+    if (checking(phone)) return 'checking';
+    // An account the back office does not list cannot be seen to be on, and a row paid from it could not be closed.
+    if (unlisted(phone)) return 'missing';
     if (phone.cap !== null && spentToday(phone.serial) + value > phone.cap) return 'cap';
     const listed = accountOf(phone);
     // Switched off in the back office, an account is not offered on the close-job form: a row paid from it could not be closed.
@@ -1266,6 +1493,94 @@ function createJobs(host) {
   const typedAmount = (amount) => (Number.isInteger(Number(amount)) ? String(Number(amount)) : Number(amount).toFixed(2));
 
   /**
+   * The amounts the queue shows, as [smallest, largest]: from the smallest amount set on any phone
+   * to the largest set on any phone, online or not. Null when no phone has a range.
+   */
+  function shownRange() {
+    const ranges = host.ranges();
+    return ranges.length ? [Math.min(...ranges.map((range) => range.min)), Math.max(...ranges.map((range) => range.max))] : null;
+  }
+
+  /** The amount range to ask for: the one the queue shows. Null when no range is to be asked for. */
+  function askedRange(current) {
+    const shown = shownRange();
+    if (!current.filter || !shown) return null;
+    // A row that is being paid stays asked for, whatever the range is now: it is closed on this page.
+    const flying = [...paying.values()].map((each) => Number(each.amount)).filter((amount) => amount > 0);
+    return [String(Math.min(shown[0], ...flying)), String(Math.max(shown[1], ...flying))];
+  }
+
+  /** Whether reading the withdrawal list by request is set up: switched on, a pass held, a base address. */
+  function apiReadable(current) {
+    return Boolean(current.api && apiPass && !apiWrong && /^https?:\/\/\S+$/i.test(current.apiBase));
+  }
+
+  function apiSay(message, level) {
+    if (message === apiSaid) return;
+    apiSaid = message;
+    host.log(message, level);
+  }
+
+  /**
+   * The rows the queue shows: those whose amount falls in the range the phones are set to, taken
+   * together. With no phone range set, every row is kept. This hides rows no phone is meant to pay,
+   * as the page filter did.
+   */
+  function byConfiguredRange(list) {
+    const shown = shownRange();
+    if (!shown) return list;
+    return list.filter((order) => Number(order.amount) >= shown[0] && Number(order.amount) <= shown[1]);
+  }
+
+  /**
+   * The list by the back office's own request. `pageRead` says a logged-in page was read too, and
+   * `fromPage` is what it showed. With a page, a row shown on both must get the same key by request,
+   * or the request is not trusted at all and the page's list is used: the ledger knows rows by that
+   * key, so a request that gives another key would let the same row be paid twice. Without a page
+   * the request's list is used as is; the ledger still stops any row from being begun twice.
+   */
+  async function listByRequest(current, fromPage, pageRead) {
+    if (!apiReadable(current)) return fromPage;
+    let list = [];
+    try {
+      const range = askedRange(current);
+      const items = [];
+      for (let page = 0; page < API_MAX_PAGES; page += 1) {
+        const answer = await apiListPage(current.apiBase, apiPass, range, page * API_PAGE, current.apiOrigin);
+        if (answer.status === 401 || answer.status === 403) {
+          apiPass = '';
+          apiSay(`Reading the withdrawal list by request stopped: the pass was refused (${answer.status}). Type it in again.`, 'error');
+          return fromPage;
+        }
+        if (answer.status !== 200 || !answer.data) throw new Error(`the service answered ${answer.status} for ${answer.url}${answer.text ? ` (${String(answer.text).replace(/\s+/g, ' ').slice(0, 800)})` : ''}`);
+        items.push(...answer.data);
+        if (!answer.data.length || items.length >= answer.total) break;
+      }
+      list = items.map((item) => logic.withdrawFromApi(item)).filter(Boolean);
+    } catch (error) {
+      apiSay(`Reading the withdrawal list by request failed: ${error.message}.${pageRead ? ' The list is read off the page.' : ''}`, 'error');
+      return fromPage;
+    }
+    if (!pageRead) {
+      apiSay('The withdrawal list is read by the back office\'s own request.');
+      return list;
+    }
+    // A row the page shows too must get the same key by request, or the request is not trusted at all.
+    for (const row of fromPage) {
+      const same = list.filter((each) => each.account === row.account && Number(each.amount) === Number(row.amount));
+      if (same.some((each) => each.key === row.key)) apiProven = true;
+      else if (same.length) {
+        apiWrong = true;
+        apiSay('Reading the withdrawal list by request is switched off until the back office is opened again: a row has one key by request and another on the page.', 'error');
+        return fromPage;
+      }
+    }
+    if (!apiProven) return fromPage;
+    apiSay('The withdrawal list is read by the back office\'s own request: a row was seen to agree with the page.');
+    return list;
+  }
+
+  /**
    * Read the withdrawal list off the page. With `refresh`, first ask the page for the newest list,
    * with the phones' amount range in the page's own filter. Nothing on the page is changed
    * except its filter.
@@ -1276,13 +1591,21 @@ function createJobs(host) {
 
   async function readOrdersNow(refresh) {
     const at = Date.now();
+    const current = config();
+    // Reading by request carries its own pass, so it needs no back-office window. Without a window
+    // the list comes from the request alone; paying still needs a window, which also closes jobs,
+    // unless closing by request is set up too.
     if (!window) {
-      orders = { at, note: 'closed', list: [] };
+      if (!apiReadable(current)) {
+        orders = { at, note: 'closed', list: [] };
+        return orders;
+      }
+      const list = await listByRequest(current, [], false);
+      orders = { at, note: 'ok', list: byConfiguredRange(list), via: 'request' };
       return orders;
     }
     const contents = window.webContents;
     if (contents.isLoading()) return orders;
-    const current = config();
     const profile = profileFor(contents.getURL());
     let page = await contents.executeJavaScript(ORDERS_SCRIPT, true);
     let note = 'ok';
@@ -1302,21 +1625,16 @@ function createJobs(host) {
       }
     } else if (refresh && at - lastSearch >= MIN_SEARCH_MS) {
       lastSearch = at;
-      const phones = host.phones().filter((phone) => phone.min !== null && phone.max !== null);
-      // Ask the page only for what a phone can pay now: no more than its account holds. With every
-      // phone out of money the whole range is asked for, so the rows that wait can still be seen.
-      const able = phones.filter((phone) => roomOf(phone) >= phone.min);
-      // A row that is being paid stays asked for, whatever its phone can pay now: it is closed on this page.
-      const flying = [...paying.values()].map((each) => Number(each.amount)).filter((amount) => amount > 0);
-      const range = current.filter && phones.length ? [String(Math.min(...(able.length ? able : phones).map((phone) => phone.min), ...flying)), String(Math.max(able.length ? Math.max(...able.map(roomOf)) : Math.max(...phones.map((phone) => phone.max)), ...flying))] : null;
+      const range = askedRange(current);
       await loadEngine(contents);
       await contents.executeJavaScript(searchScript(profile, range), true);
       await sleep(SEARCH_SETTLE_MS);
       await settle(contents);
       page = await contents.executeJavaScript(ORDERS_SCRIPT, true);
     }
-    const list = note === 'ok' ? (page.rows || []).map((cells) => logic.parseWithdrawRow(cells)).filter(Boolean) : [];
-    orders = { at, note, list };
+    const fromPage = note === 'ok' ? (page.rows || []).map((cells) => logic.parseWithdrawRow(cells)).filter(Boolean) : [];
+    const list = current.api && note === 'ok' ? await listByRequest(current, fromPage, true) : fromPage;
+    orders = { at, note, list: note === 'ok' ? byConfiguredRange(list) : list, via: list === fromPage ? 'page' : 'request' };
     return orders;
   }
 
@@ -1344,12 +1662,16 @@ function createJobs(host) {
   async function pay(key) {
     if (working) throw new Error('A job is already running.');
     if (halted()) throw new Error('Withdrawals are stopped. Check the row in red, then reset the stop.');
-    const contents = requireWindow();
     const current = config();
+    // With reading-and-closing by request set up, paying needs no back-office window: the job is
+    // read and closed by the back office's own requests. Otherwise the window closes it on the page.
+    const byApi = apiReadable(current);
+    const contents = window ? window.webContents : null;
+    if (!byApi && !contents) throw new Error('Open the back office and sign in first.');
     const text = host.store.state.workflows[current.workflow];
     if (!text) throw new Error('Choose a saved workflow for paying first.');
     if (host.busy()) throw new Error(`Wait for "${host.busy()}" to finish first.`);
-    if (!profileFor(contents.getURL())) throw new Error('There is no close-job profile for this back-office address.');
+    if (!byApi && !profileFor(contents.getURL())) throw new Error('There is no close-job profile for this back-office address.');
     const listed = orders.list.find((each) => each.key === key);
     if (!listed) throw new Error('That withdrawal is no longer on the page.');
     if (ledger[key] || [...paying.values()].some((each) => each.key === key)) throw new Error('That withdrawal was already begun by this app, so it is not begun again.');
@@ -1358,6 +1680,7 @@ function createJobs(host) {
       if (phoneFor(listed.amount)) throw new Error(`Every phone that can pay ${listed.amount} is busy. Try again in a moment.`);
       const inRange = host.phones().find((each) => each.min !== null && Number(listed.amount) >= each.min && Number(listed.amount) <= each.max);
       if (inRange && shortOf(inRange, Number(listed.amount)) === 'stopped') throw new Error(`The phone that takes ${listed.amount} is stopped. Check its row in red, then reset that phone.`);
+      if (inRange && shortOf(inRange, Number(listed.amount)) === 'checking') throw new Error(`The phone that takes ${listed.amount} is still being checked. Try again in a moment.`);
       throw new Error(`No online phone can pay ${listed.amount} now.`);
     }
     const serial = phone.serial;
@@ -1412,9 +1735,10 @@ function createJobs(host) {
       try {
         stage('closing');
         closing = true;
-        // Closing waits its turn for the page. The account is what tells this row from every other
-        // on the page; the amount is the fallback.
-        await withPage(() => closeByProfile(contents, current, read.text, [order.account], key, [order.account]));
+        // Closing by request names the paying account by its id; closing on the page waits its turn
+        // and tells this row from the others by the account, the amount as a fallback.
+        if (byApi) await closeByApi(current, order, phone, key);
+        else await withPage(() => closeByProfile(contents, current, read.text, [order.account], key, [order.account]));
       } catch (error) {
         if (!/^Trial mode/.test(error.message)) throw error;
         // Paid, and left open on purpose: the operator closes this one by hand.
@@ -1442,20 +1766,35 @@ function createJobs(host) {
     } finally {
       paying.delete(serial);
       await readOrders(false).catch(() => {});
+      // Read the shop's balances again now the job is done, so the next job starts from the real
+      // figure, not the one lowered by hand above. By request in link mode, off the page otherwise.
+      if (apiReadable(config())) await readApiAccounts(true).catch(() => {});
+      else await readAccounts(true).catch(() => {});
+      syncPhones();
       publish();
     }
   }
 
   /** Each turn: bring the list up to date, and in automatic mode give every free phone a row to pay. */
   async function payTick() {
-    if (!window || working || auto || recording) return;
+    if (working || auto || recording) return;
+    const current = config();
+    // With reading by request set up, the turn runs without a back-office window.
+    if (!window && !apiReadable(current)) return;
     try {
       const before = JSON.stringify(orders);
       // With the watch switched off the page is only read, never searched or moved.
-      await readOrders(config().watch && !host.busy());
+      await readOrders((window ? current.watch : true) && !host.busy());
       const known = JSON.stringify(accounts);
-      await readAccounts().catch((error) => { accounts = { at: Date.now(), note: 'error', map: {}, error: error.message }; });
+      // A phone that has just come online is checked now, not when the accounts are next due.
+      if (host.watched().some(checking)) {
+        lastAccounts = 0;
+        lastApiAccounts = 0;
+      }
+      if (window) await readAccounts().catch((error) => { accounts = { at: Date.now(), note: 'error', map: {}, error: error.message }; });
+      else await readApiAccounts().catch((error) => { accounts = { at: Date.now(), note: 'error', map: accounts.map, error: error.message }; });
       if (JSON.stringify(orders) !== before || JSON.stringify(accounts) !== known) publish();
+      syncPhones();
       checkFunds();
       if (host.busy()) return;
       let began = 0;
@@ -1494,7 +1833,8 @@ function createJobs(host) {
 
   function setPayAuto(on) {
     if (on) {
-      requireWindow();
+      // Paying needs a back-office window, unless reading and closing by request are set up.
+      if (!window && !apiReadable(config())) throw new Error('Open the back office and sign in first.');
       if (halted()) throw new Error('Withdrawals are stopped. Check the row in red, then reset the stop.');
       if (config().closeDry) throw new Error('Turn trial mode off before automatic mode: a trial pays a row and leaves it open.');
       if (!host.store.state.workflows[config().workflow]) throw new Error('Choose a saved workflow for paying first.');
@@ -1523,6 +1863,7 @@ function createJobs(host) {
     await readOrders(true);
     lastAccounts = 0;
     await readAccounts().catch((error) => { accounts = { at: Date.now(), note: 'error', map: {}, error: error.message }; });
+    syncPhones();
     checkFunds();
     publish();
     return view();
@@ -1645,7 +1986,7 @@ function createJobs(host) {
       .slice(0, 500);
   }
 
-  return { view, save, open, pick, record, clear, read, runOnce, setAuto, screen, close, refreshOrders, pay, setPayAuto, unhalt, resolve, switchAccount, signedIn, slipFile, search };
+  return { view, save, setApiToken, open, pick, record, clear, read, runOnce, setAuto, screen, close, refreshOrders, pay, setPayAuto, unhalt, resolve, switchAccount, signedIn, slipFile, search };
 }
 
 module.exports = { createJobs };
