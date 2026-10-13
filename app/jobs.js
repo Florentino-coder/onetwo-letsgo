@@ -606,6 +606,8 @@ function createJobs(host) {
       phones: host.phones().map((phone) => ({ ...phone, spent: spentToday(phone.serial) })),
       // The phones whose account has not been read from the back office since they came online.
       checking: host.watched().filter(checking).map((phone) => phone.serial),
+      // The banks no phone pays to for now, by code.
+      skipBanks: host.skipBanks(),
       // The shop's accounts as the back office lists them, by account number.
       accounts: { at: accounts.at, note: accounts.note, error: accounts.error || '', fresh: accounts.note === 'ok' && Date.now() - accounts.at <= ACCOUNTS_FRESH_MS, map: accounts.map },
       // What each phone began to pay today, online or not.
@@ -1168,13 +1170,40 @@ function createJobs(host) {
     return view();
   }
 
-  /** The online phone whose amount range holds this amount, or null. A phone with no range takes nothing. */
-  function phoneFor(amount, free = false) {
-    const value = Number(amount);
-    const able = host.phones().filter((phone) => phone.min !== null && phone.max !== null && value >= phone.min && value <= phone.max && !shortOf(phone, value) && !(free && paying.has(phone.serial)));
+  /** Whether a phone is told to pass over rows to this bank: by the list for every phone, or by its own. */
+  function skips(phone, code) {
+    return Boolean(code) && (host.skipBanks().includes(code) || (phone.skip || []).includes(code));
+  }
+
+  /** Whether a row's bank is one the phones' app does not list, where only those are paid to. */
+  function unlistedBank(order) {
+    return Boolean(host.knownBanksOnly) && !logic.bankCode(order.bank);
+  }
+
+  /**
+   * The online phone whose amount range holds this row's amount and which pays to its bank, or
+   * null. A phone with no range takes nothing.
+   */
+  function phoneFor(order, free = false) {
+    const value = Number(order.amount);
+    const code = logic.bankCode(order.bank);
+    if (unlistedBank(order)) return null;
+    const able = host.phones().filter((phone) => phone.min !== null && phone.max !== null && value >= phone.min && value <= phone.max && !skips(phone, code) && !shortOf(phone, value) && !(free && paying.has(phone.serial)));
     // The phone that has waited longest takes the row, so the work is shared out.
     able.sort((a, b) => (lastTaken.get(a.serial) || 0) - (lastTaken.get(b.serial) || 0));
     return able[0] || null;
+  }
+
+  /** Why no phone takes a row, as a short word for the window, or '' when that is not known. */
+  function whyNot(order) {
+    if (unlistedBank(order)) return 'nobank';
+    const value = Number(order.amount);
+    const code = logic.bankCode(order.bank);
+    const inRange = host.phones().filter((each) => each.min !== null && value >= each.min && value <= each.max);
+    const willing = inRange.find((each) => !skips(each, code));
+    if (willing) return shortOf(willing, value);
+    // Every phone that takes this amount passes over the bank, or the bank is passed over by all.
+    return inRange.length || host.skipBanks().includes(code) ? 'skipbank' : '';
   }
 
   // ── the shop's accounts ──
@@ -1644,11 +1673,10 @@ function createJobs(host) {
       at: orders.at,
       note: orders.note,
       list: orders.list.map((order) => {
-        const phone = phoneFor(order.amount);
+        const phone = phoneFor(order);
         const entry = ledger[order.key];
         // Say why no phone takes a row whose amount is in a phone's range.
-        const inRange = phone ? null : host.phones().find((each) => each.min !== null && Number(order.amount) >= each.min && Number(order.amount) <= each.max);
-        return { ...order, state: entry ? entry.state : '', detail: entry ? entry.detail || '' : '', serial: phone ? phone.serial : '', phone: phone ? phone.label : '', short: inRange ? shortOf(inRange, Number(order.amount)) : '' };
+        return { ...order, state: entry ? entry.state : '', detail: entry ? entry.detail || '' : '', serial: phone ? phone.serial : '', phone: phone ? phone.label : '', short: phone ? '' : whyNot(order) };
       }),
     };
   }
@@ -1675,12 +1703,14 @@ function createJobs(host) {
     const listed = orders.list.find((each) => each.key === key);
     if (!listed) throw new Error('That withdrawal is no longer on the page.');
     if (ledger[key] || [...paying.values()].some((each) => each.key === key)) throw new Error('That withdrawal was already begun by this app, so it is not begun again.');
-    const phone = phoneFor(listed.amount, true);
+    const phone = phoneFor(listed, true);
     if (!phone) {
-      if (phoneFor(listed.amount)) throw new Error(`Every phone that can pay ${listed.amount} is busy. Try again in a moment.`);
-      const inRange = host.phones().find((each) => each.min !== null && Number(listed.amount) >= each.min && Number(listed.amount) <= each.max);
-      if (inRange && shortOf(inRange, Number(listed.amount)) === 'stopped') throw new Error(`The phone that takes ${listed.amount} is stopped. Check its row in red, then reset that phone.`);
-      if (inRange && shortOf(inRange, Number(listed.amount)) === 'checking') throw new Error(`The phone that takes ${listed.amount} is still being checked. Try again in a moment.`);
+      if (phoneFor(listed)) throw new Error(`Every phone that can pay ${listed.amount} is busy. Try again in a moment.`);
+      const why = whyNot(listed);
+      if (why === 'stopped') throw new Error(`The phone that takes ${listed.amount} is stopped. Check its row in red, then reset that phone.`);
+      if (why === 'checking') throw new Error(`The phone that takes ${listed.amount} is still being checked. Try again in a moment.`);
+      if (why === 'skipbank') throw new Error(`Withdrawals to ${listed.bank} are passed over for now.`);
+      if (why === 'nobank') throw new Error(`The bank "${listed.bank}" is not one the phones' app lists, so it is not paid to.`);
       throw new Error(`No online phone can pay ${listed.amount} now.`);
     }
     const serial = phone.serial;
@@ -1801,7 +1831,7 @@ function createJobs(host) {
       if (payAuto && !halted() && orders.note === 'ok') {
         for (const order of orders.list) {
           if (ledger[order.key] || [...paying.values()].some((each) => each.key === order.key)) continue;
-          if (!phoneFor(order.amount, true)) continue;
+          if (!phoneFor(order, true)) continue;
           // Not waited for: the phones pay side by side. A fault stops its own phone.
           pay(order.key).catch(() => {});
           began += 1;

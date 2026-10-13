@@ -239,7 +239,7 @@ const jobs = createJobs({
   readScreen: (serial) => readScreen(serial),
   readSlip: (serial, since) => readSlip(serial, since),
   phoneClock: (serial) => requireAdb().clock(serial),
-  phones: () => [...devices.values()].filter((device) => device.status === 'device' && deviceMeta(device.serial).pay_on !== false).map((device) => ({ serial: device.serial, label: deviceLabel(device), since: device.onlineSince || 0, ...amountRange(device.serial), ...payAccount(device.serial) })),
+  phones: () => [...devices.values()].filter((device) => device.status === 'device' && deviceMeta(device.serial).pay_on !== false).map((device) => ({ serial: device.serial, label: deviceLabel(device), since: device.onlineSince || 0, skip: skipBanks(deviceMeta(device.serial).skip_banks), ...amountRange(device.serial), ...payAccount(device.serial) })),
   // Every online phone that has an account, switched on or not, with when it came online.
   watched: () => [...devices.values()].filter((device) => device.status === 'device' && payAccount(device.serial).account).map((device) => ({ serial: device.serial, account: payAccount(device.serial).account, since: device.onlineSince || 0 })),
   // The back office says which accounts are on: every phone stands the way its account stands there.
@@ -256,6 +256,9 @@ const jobs = createJobs({
     store.saveState();
     send('devices', { devices: devicesSnapshot(), scannedAt: Date.now() });
   },
+  // The banks no phone pays to for now, by code, and whether a bank the app does not list is paid to at all.
+  skipBanks: () => skipBanks(store.config.skip_banks),
+  knownBanksOnly: USER,
   // The amount range of every phone that has one, online or not, switched on or not.
   ranges: () => Object.keys(store.state.devices).map(amountRange).filter((range) => range.min !== null),
   // Money left the phone's account: keep the balance the operator entered in step.
@@ -331,6 +334,12 @@ function deviceMeta(serial) {
   return meta && typeof meta === 'object' ? meta : {};
 }
 
+/** A list of banks to pass over as kept, cleaned: the codes of banks the phones' app lists, each once. */
+function skipBanks(kept) {
+  const known = new Set(logic.BANKS.map((bank) => bank.code));
+  return [...new Set((Array.isArray(kept) ? kept : []).map(String))].filter((code) => known.has(code));
+}
+
 /** The amounts this phone may pay, as { min, max }; both null when no range is set. */
 function amountRange(serial) {
   const { amount_min: min, amount_max: max } = deviceMeta(serial);
@@ -375,6 +384,7 @@ function deviceView(device) {
     amountMin: amountRange(device.serial).min,
     amountMax: amountRange(device.serial).max,
     payOn: meta.pay_on !== false,
+    skipBanks: skipBanks(meta.skip_banks),
     pay: payAccount(device.serial),
     live: liveProcesses.has(device.serial),
   };
@@ -1246,13 +1256,14 @@ function publicState() {
     policies: store.state.policies,
     groupProfiles: store.state.group_live_profiles,
     profiles: logic.SCRCPY_PROFILES,
+    banks: logic.BANKS,
     logs,
   };
 }
 
 // What the user program's window may ask for. Everything else belongs to the studio.
 const USER_CALLS = new Set([
-  'state:get', 'devices:scan', 'adb:restart', 'device:meta', 'device:pin', 'device:pin-show', 'device:range', 'device:pay', 'device:account',
+  'state:get', 'devices:scan', 'adb:restart', 'device:meta', 'device:pin', 'device:pin-show', 'device:range', 'device:pay', 'device:account', 'device:skip', 'banks:skip',
   'jobs:set', 'jobs:apitoken', 'jobs:open', 'jobs:orders', 'jobs:pay', 'jobs:payauto', 'jobs:unhalt', 'jobs:resolve',
   'folder:open', 'update:check', 'update:restart',
   'license:set', 'pack:import', 'pack:rollback', 'user:setup', 'user:signed',
@@ -1376,6 +1387,24 @@ function registerIpc() {
     store.saveState();
     log(`Saved the paying account of ${serial}.`, 'info', serial);
     return devicesSnapshot();
+  });
+
+  // The banks this phone passes over: rows to them go to another phone, or wait.
+  handle('device:skip', ({ serial, codes }) => {
+    if (!devices.has(serial) && !store.state.devices[serial]) throw new Error('Select a device first.');
+    store.state.devices[serial] = { ...deviceMeta(serial), skip_banks: skipBanks(codes) };
+    store.saveState();
+    send('jobs', jobs.view());
+    return devicesSnapshot();
+  });
+
+  // The banks no phone pays to for now.
+  handle('banks:skip', ({ codes }) => {
+    store.config.skip_banks = skipBanks(codes);
+    store.saveConfig();
+    log(`Banks passed over by every phone: ${store.config.skip_banks.join(', ') || 'none'}.`);
+    send('jobs', jobs.view());
+    return publicState();
   });
 
   // Whether this phone takes withdrawals at all. Off keeps its range but gives it no rows.

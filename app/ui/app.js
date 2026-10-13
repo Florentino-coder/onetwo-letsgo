@@ -1652,7 +1652,7 @@ const VIEWS = {
     const row = (order) => {
       const stopped = (halt && halt.key === order.key) || Object.values(stops).some((each) => each.key === order.key);
       const onPhone = Object.entries(paying).find(([, each]) => each.key === order.key);
-      const label = stopped ? 'หยุด: ต้องตรวจด้วยมือ' : onPhone ? PHONE_STATE[onPhone[1].state] || 'กำลังทำงาน' : WITHDRAW_STATE[order.state] || (order.serial ? 'รอทำ' : order.short === 'cap' ? 'เครื่องถึงเพดานวันนี้' : order.short === 'balance' ? 'ยอดคงเหลือของเครื่องไม่พอ' : order.short === 'off' ? 'บัญชีของเครื่องปิดอยู่ในหลังบ้าน' : order.short === 'stopped' ? 'เครื่องหยุดอยู่ รอรีเซ็ต' : order.short === 'checking' ? 'กำลังตรวจสอบเครื่อง' : order.short === 'missing' ? 'ไม่พบบัญชีของเครื่องในหลังบ้าน' : 'ไม่มีเครื่องรับยอดนี้');
+      const label = stopped ? 'หยุด: ต้องตรวจด้วยมือ' : onPhone ? PHONE_STATE[onPhone[1].state] || 'กำลังทำงาน' : WITHDRAW_STATE[order.state] || (order.serial ? 'รอทำ' : order.short === 'cap' ? 'เครื่องถึงเพดานวันนี้' : order.short === 'balance' ? 'ยอดคงเหลือของเครื่องไม่พอ' : order.short === 'off' ? 'บัญชีของเครื่องปิดอยู่ในหลังบ้าน' : order.short === 'stopped' ? 'เครื่องหยุดอยู่ รอรีเซ็ต' : order.short === 'checking' ? 'กำลังตรวจสอบเครื่อง' : order.short === 'missing' ? 'ไม่พบบัญชีของเครื่องในหลังบ้าน' : order.short === 'skipbank' ? 'ข้ามธนาคารนี้' : order.short === 'nobank' ? 'ธนาคารนี้ไม่รองรับ' : 'ไม่มีเครื่องรับยอดนี้');
       return h('tr', { class: stopped || bad(order) ? 'bad' : order.state === 'done' ? 'good' : '' },
         h('td', { class: 'mono num' }, baht(order.amount)),
         h('td', null, h('div', null, order.bank), h('div', { class: 'mono muted' }, order.account)),

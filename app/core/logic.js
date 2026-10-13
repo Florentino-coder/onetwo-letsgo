@@ -453,6 +453,9 @@ const SLIP_BANKS = [
   ['SME', 'ธนาคารพัฒนาวิสาหกิจขนาดกลางและขนาดย่อม', ['วิสาหกิจขนาดกลาง', 'เอสเอ็มอี'], ['sme', 'sme bank']],
   ['JPMC', 'ธนาคารเจพีมอร์แกน เชส', ['เจพีมอร์แกน'], ['jpmc', 'jpmorgan', 'jp morgan']],
 ];
+// The banks the phones' app can pay to, in the order its own list shows them: { code, name }.
+const BANKS = ['BBL', 'KBANK', 'KTB', 'TTB', 'SCB', 'CIMBT', 'UOBT', 'BAY', 'GSB', 'LHBANK', 'KKP', 'TISCO', 'BAAC', 'CITI', 'GHB', 'ICBC', 'TCRB', 'SCBT', 'HSBC', 'SMBC', 'MHCB', 'ISBT', 'DBBK', 'BOC', 'IOBA', 'BNPP', 'SME', 'JPMC']
+  .map((code) => ({ code, name: SLIP_BANKS.find((bank) => bank[0] === code)[1] }));
 const SLIP_MASK = MASK;
 const SLIP_ACCOUNT_RES = [
   // 324-0-xxx718, xxx-x-x0758-x
@@ -1017,6 +1020,7 @@ module.exports = {
   wholeNumber,
   parseUiText,
   parseImageList,
+  BANKS,
   mediaRowsToList,
   screenShows,
   verifyScreen,

@@ -66,6 +66,8 @@ const FAULTS = [
   [/The phone that takes .* is stopped/, () => 'เครื่องที่รับยอดนี้หยุดอยู่ ตรวจแล้วรีเซ็ตเครื่องนั้นก่อน'],
   [/No online phone can pay/, () => 'ไม่มีเครื่องที่พร้อมจ่ายยอดนี้'],
   [/is still being checked/, () => 'เครื่องที่รับยอดนี้กำลังตรวจสอบอยู่ รอสักครู่แล้วลองใหม่'],
+  [/are passed over for now/, () => 'ธนาคารนี้ถูกตั้งให้ข้ามอยู่ เอาออกจากรายการข้ามก่อน'],
+  [/is not one the phones' app lists/, () => 'ธนาคารนี้ไม่อยู่ในรายการของแอปธนาคาร จึงไม่จ่าย'],
   [/no close-job profile/, () => 'ชุดงานนี้ไม่มีขั้นตอนปิดงานสำหรับหลังบ้านนี้'],
   [/Choose a saved workflow for paying first/, () => 'ยังไม่มีชุดงาน นำเข้าชุดงานที่หน้าตั้งค่า'],
   [/Switch automatic mode off and wait/, () => 'ปิดจ่ายอัตโนมัติและรอให้ทุกเครื่องทำงานเสร็จก่อน'],
@@ -160,6 +162,24 @@ async function act(channel, payload, done) {
     S.busy = false;
     render(true);
   }
+}
+
+/**
+ * The banks to tick, as the phones' app lists them. `chosen` is the codes ticked now; `changed`
+ * is given the new list each time one is ticked or cleared.
+ */
+function bankChips(chosen, changed) {
+  const now = new Set(chosen);
+  return h('div', { class: 'chips' }, S.state.banks.map((bank) => {
+    const chip = h('button', { class: `chip ${now.has(bank.code) ? 'on' : ''}`, type: 'button', title: bank.name }, bank.code);
+    chip.addEventListener('click', () => {
+      if (now.has(bank.code)) now.delete(bank.code);
+      else now.add(bank.code);
+      chip.classList.toggle('on');
+      changed(S.state.banks.map((each) => each.code).filter((code) => now.has(code)));
+    });
+    return chip;
+  }));
 }
 
 // ── what the pages show ──────────────────────────────────────────────────
@@ -311,7 +331,8 @@ function home() {
 
   const phoneRow = (view) => h('button', { class: 'row phone', onclick: () => openPhone(view.device.serial) },
     h('span', null, view.device.label),
-    h('span', { class: 'c' }, `${tail(view.device.pay.account)}${view.balance !== null ? ` · ${whole(view.balance)}` : ''}`, view.device.drops ? h('span', { class: view.device.drops >= 3 ? 'bad' : 'run', title: 'จำนวนครั้งที่เครื่องหลุดการเชื่อมต่อใน 1 ชั่วโมงที่ผ่านมา' }, ` · หลุด ${view.device.drops}`) : null),
+    h('span', { class: 'c' }, `${tail(view.device.pay.account)}${view.balance !== null ? ` · ${whole(view.balance)}` : ''}`, view.device.drops ? h('span', { class: view.device.drops >= 3 ? 'bad' : 'run', title: 'จำนวนครั้งที่เครื่องหลุดการเชื่อมต่อใน 1 ชั่วโมงที่ผ่านมา' }, ` · หลุด ${view.device.drops}`) : null,
+      view.device.skipBanks.length ? h('span', { class: 'run', title: `เครื่องนี้ข้าม: ${view.device.skipBanks.join(', ')}` }, ` · ข้าม ${view.device.skipBanks.length}`) : null),
     h('span', { class: `st ${view.word[1]}` }, view.word[0]));
 
   const orderRow = (order) => {
@@ -320,7 +341,7 @@ function home() {
     let status;
     if (onPhone) status = h('span', { class: 'st run' }, `${worker ? worker.label : ''} · ${PHONE_STATE[onPhone[1].state] || 'กำลังทำงาน'}`);
     else if (order.state) status = h('span', { class: `st ${ROW_STATE[order.state] ? ROW_STATE[order.state][1] : 'wait'}` }, ROW_STATE[order.state] ? ROW_STATE[order.state][0] : order.state);
-    else if (!order.serial) status = h('span', { class: 'st wait' }, { cap: 'เครื่องถึงเพดาน', balance: 'เงินในเครื่องไม่พอ', off: 'บัญชีเครื่องปิดอยู่', stopped: 'เครื่องหยุดอยู่', checking: 'กำลังตรวจสอบเครื่อง', missing: 'ไม่พบบัญชีเครื่องในหลังบ้าน' }[order.short] || (devices.some((device) => device.online && !device.payOn && device.amountMin !== null && Number(order.amount) >= device.amountMin && Number(order.amount) <= device.amountMax) ? 'บัญชีเครื่องปิดอยู่' : 'ไม่มีเครื่องรับยอดนี้'));
+    else if (!order.serial) status = h('span', { class: 'st wait' }, { cap: 'เครื่องถึงเพดาน', balance: 'เงินในเครื่องไม่พอ', off: 'บัญชีเครื่องปิดอยู่', stopped: 'เครื่องหยุดอยู่', checking: 'กำลังตรวจสอบเครื่อง', missing: 'ไม่พบบัญชีเครื่องในหลังบ้าน', skipbank: 'ข้ามธนาคารนี้', nobank: 'ธนาคารนี้ไม่รองรับ' }[order.short] || (devices.some((device) => device.online && !device.payOn && device.amountMin !== null && Number(order.amount) >= device.amountMin && Number(order.amount) <= device.amountMax) ? 'บัญชีเครื่องปิดอยู่' : 'ไม่มีเครื่องรับยอดนี้'));
     else if (jobs.payAuto) status = h('span', { class: 'st wait' }, `รอ · ${order.phone}`);
     else status = h('span', { class: 'st' }, h('button', { class: 'btn small gold', disabled: Boolean(jobs.halt) || out, onclick: () => act('jobs:pay', { key: order.key }) }, `จ่าย · ${order.phone}`));
     return h('div', { class: 'row order' }, h('span', { class: 'a' }, money(order.amount)),
@@ -343,6 +364,7 @@ function home() {
         h('button', { class: 'btn', onclick: () => act('pack:import', {}, 'นำเข้าชุดงานแล้ว') }, 'นำเข้าจากไฟล์'),
         h('button', { class: 'btn gold', onclick: async () => { const result = await ask('update:check'); if (result) S.state.update = result; const state = await ask('state:get'); if (state) S.state = state; toast(S.state.user.pack.current ? 'ได้รับชุดงานแล้ว' : 'ยังไม่มีชุดงานจากผู้พัฒนา', S.state.user.pack.current ? 'good' : 'bad'); render(true); } }, 'ตรวจหาชุดงาน'))),
     !noPack && !jobs.halt && !out && !firstDone && h('div', { class: 'note' }, h('span', null, h('b', null, 'ลองหนึ่งรายการก่อน. '), 'ตั้งเครื่องให้ครบ แล้วกด "จ่าย" ที่รายการในคิวหนึ่งรายการ ดูให้จบจนขึ้น "ปิดงานแล้ว" จากนั้นจึงเปิดจ่ายอัตโนมัติได้')),
+    jobs.skipBanks.length ? h('div', { class: 'note' }, h('span', null, h('b', null, `ข้ามธนาคารอยู่: ${jobs.skipBanks.join(', ')}. `), 'รายการไปธนาคารนี้ไม่ถูกจ่าย เอาออกได้ที่หน้าตั้งค่า')) : null,
     h('div', { class: 'kpis' },
       h('div', { class: 'kpi' }, h('div', { class: 'l' }, 'จ่ายวันนี้'), h('div', { class: 'v gold' }, money(Object.values(jobs.spent).reduce((sum, value) => sum + value, 0)))),
       h('div', { class: 'kpi' }, h('div', { class: 'l' }, 'สำเร็จ'), h('div', { class: 'v' }, today.filter((entry) => entry.state === 'done').length)),
@@ -446,7 +468,10 @@ function settings() {
         pack.previous && line('รุ่นก่อน', h('span', { class: 'v' }, `${pack.previous.name} ${pack.previous.version}`), h('button', { class: 'lk', onclick: () => act('pack:rollback', {}, 'ย้อนกลับไปชุดงานรุ่นก่อนแล้ว') }, 'ย้อนกลับไปรุ่นนี้')),
         pack.current && pack.current.phone.model && line('ทดสอบกับ', h('span', { class: 'v plain' }, `${pack.current.phone.model}${pack.current.phone.width ? ` · ${pack.current.phone.width}×${pack.current.phone.height}` : ''}`)),
         h('div', { class: 'h gap' }, 'การจ่าย'),
-        line('ช่วงยอดหน้าเว็บ', h('span', { class: 'v plain' }, 'ให้หลังบ้านแสดงเฉพาะยอดของเครื่อง'), h('button', { class: `sw ${jobs.config.filter ? 'on' : ''}`, onclick: () => act('jobs:set', { filter: !jobs.config.filter }) }, h('i')))),
+        line('ช่วงยอดหน้าเว็บ', h('span', { class: 'v plain' }, 'ให้หลังบ้านแสดงเฉพาะยอดของเครื่อง'), h('button', { class: `sw ${jobs.config.filter ? 'on' : ''}`, onclick: () => act('jobs:set', { filter: !jobs.config.filter }) }, h('i'))),
+        h('div', { class: 'h gap' }, 'ธนาคารที่ข้าม (ทุกเครื่อง)'),
+        bankChips(jobs.skipBanks, (codes) => act('banks:skip', { codes })),
+        h('div', { class: 'hint pad' }, 'กดเลือกธนาคารที่โอนไม่ได้ชั่วคราว รายการไปธนาคารนั้นจะรออยู่ในคิว เครื่องจ่ายรายการอื่นต่อ กดอีกครั้งเพื่อเอาออก ตั้งแยกรายเครื่องได้ในหน้าต่างของเครื่อง')),
       h('div', { class: 'pane' },
         h('div', { class: 'h' }, 'เกี่ยวกับ'),
         h('div', { class: 'big' }, 'OneTwo ', h('span', null, 'ADB')),
@@ -521,6 +546,7 @@ function openPhone(serial) {
       ['device:account', { serial, bank: BANK, account: value('phone-account'), holder: value('phone-holder'), cap: value('phone-cap'), balance: value('phone-balance'), scale: value('phone-speed') }],
       ['device:range', { serial, min: value('phone-min'), max: value('phone-max') }],
     ];
+    calls.push(['device:skip', { serial, codes: skip }]);
     if (value('phone-pin')) calls.push(['device:pin', { serial, pin: value('phone-pin') }]);
     for (const [channel, payload] of calls) {
       const data = await ask(channel, payload);
@@ -530,6 +556,7 @@ function openPhone(serial) {
     toast('บันทึกแล้ว', 'good');
     close();
   };
+  let skip = device.skipBanks;
   const speed = SPEEDS.reduce((best, each) => (Math.abs(each[0] - device.pay.scale) < Math.abs(best[0] - device.pay.scale) ? each : best))[0];
   $('modal').replaceChildren(h('div', { class: 'veil', onmousedown: (event) => { if (event.target === event.currentTarget) close(); } },
     h('div', { class: 'sheet' },
@@ -553,7 +580,8 @@ function openPhone(serial) {
         field('ยอดสูงสุดที่เครื่องนี้จ่าย', h('input', { class: 'inp', id: 'phone-max', type: 'number', min: 1, value: device.amountMax ?? '' })),
         field('เพดานต่อวัน (เว้นว่าง = ไม่จำกัด)', h('input', { class: 'inp', id: 'phone-cap', type: 'number', min: 0, value: device.pay.cap ?? '' })),
         field('ยอดคงเหลือในบัญชี (ใส่เองเมื่อหลังบ้านไม่แสดง)', h('input', { class: 'inp', id: 'phone-balance', type: 'number', min: 0, value: device.pay.balance ?? '' })),
-        field('ความเร็วของเครื่องนี้', h('select', { class: 'inp plain', id: 'phone-speed' }, SPEEDS.map(([scale, name]) => h('option', { value: scale, selected: scale === speed }, name))), true)),
+        field('ความเร็วของเครื่องนี้', h('select', { class: 'inp plain', id: 'phone-speed' }, SPEEDS.map(([scale, name]) => h('option', { value: scale, selected: scale === speed }, name))), true),
+        field('ธนาคารที่เครื่องนี้ข้าม (กดเลือก แล้วกดบันทึก)', bankChips(skip, (codes) => { skip = codes; }), true)),
       h('div', { class: 'hint' }, 'เริ่มที่ "ปกติ" ก่อน เร่งทีละขั้นเมื่อจ่ายได้นิ่งแล้ว ถ้าเครื่องแตะพลาดหรือหน้าจอโหลดไม่ทัน ให้ลดความเร็วลง'),
       view.stop && h('div', { class: 'badline' }, `เครื่องนี้หยุดอยู่: ${thai(view.stop.message)}`),
       h('div', { class: 'acts' }, h('button', { class: 'btn', onclick: close }, 'ปิด'), h('button', { class: 'btn gold', onclick: save }, 'บันทึก')))));
