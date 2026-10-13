@@ -79,6 +79,8 @@ const DEFAULTS = {
   // A "checkname" step of the paying workflow compares the name on the bank app's confirm page
   // with the name of the job. Off, such a step passes without looking.
   checkName: true,
+  // On, a family name the confirm page shows must be checked too: a job that gives none is passed over.
+  checkFamily: false,
   interval: 5,
   reload: false,
 };

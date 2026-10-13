@@ -474,6 +474,7 @@ function settings() {
         h('div', { class: 'h gap' }, 'การจ่าย'),
         line('ช่วงยอดหน้าเว็บ', h('span', { class: 'v plain' }, 'ให้หลังบ้านแสดงเฉพาะยอดของเครื่อง'), h('button', { class: `sw ${jobs.config.filter ? 'on' : ''}`, onclick: () => act('jobs:set', { filter: !jobs.config.filter }) }, h('i'))),
         line('เช็กชื่อผู้รับ', h('span', { class: 'v plain' }, 'ชื่อบนหน้ายืนยันต้องตรงกับรายการ จึงกดยืนยัน'), h('button', { class: `sw ${jobs.config.checkName !== false ? 'on' : ''}`, onclick: () => act('jobs:set', { checkName: jobs.config.checkName === false }) }, h('i'))),
+        line('ต้องมีนามสกุล', h('span', { class: 'v plain' }, 'แอปแสดงนามสกุล แต่รายการไม่มี ให้ข้ามรายการ'), h('button', { class: `sw ${jobs.config.checkFamily ? 'on' : ''}`, disabled: jobs.config.checkName === false, onclick: () => act('jobs:set', { checkFamily: !jobs.config.checkFamily }) }, h('i'))),
         h('div', { class: 'h gap' }, 'ธนาคารที่ข้าม (ทุกเครื่อง)'),
         bankChips(jobs.skipBanks, (codes) => act('banks:skip', { codes })),
         h('div', { class: 'hint pad' }, 'กดเลือกธนาคารที่โอนไม่ได้ชั่วคราว รายการไปธนาคารนั้นจะรออยู่ในคิว เครื่องจ่ายรายการอื่นต่อ กดอีกครั้งเพื่อเอาออก ตั้งแยกรายเครื่องได้ในหน้าต่างของเครื่อง')),

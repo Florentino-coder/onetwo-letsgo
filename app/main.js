@@ -843,7 +843,7 @@ async function runWorkflowStep(device, step, workflowName) {
         if (shown || Date.now() >= until) break;
         await sleep(TAPTEXT_RETRY_MS);
       }
-      const verdict = screen.compareNames(shown, step.argument);
+      const verdict = screen.compareNames(shown, step.argument, (store.config.jobs || {}).checkFamily === true);
       if (verdict === 'same') return 'the same name';
       if (verdict === 'other') throw new Error(`The name on the phone's screen ("${shown}") is not the name of the job ("${step.argument}"). Nothing was confirmed.`);
       throw new Error(`The name on the phone's screen cannot be compared with the name of the job (screen "${shown || 'no name'}", job "${step.argument}"). Nothing was confirmed.`);
@@ -1289,7 +1289,7 @@ const USER_CALLS = new Set([
 const UNLICENSED_CALLS = new Set(['state:get', 'license:set', 'update:check', 'update:restart', 'folder:open']);
 // The settings of a job the user program may change; the rest come from the pack. The link
 // addresses stay on this computer, like the back-office link, and are set once at first run.
-const USER_JOB_KEYS = ['url', 'filter', 'apiBase', 'apiOrigin', 'apiSettlementPath', 'checkName'];
+const USER_JOB_KEYS = ['url', 'filter', 'apiBase', 'apiOrigin', 'apiSettlementPath', 'checkName', 'checkFamily'];
 
 function handle(channel, handler) {
   ipcMain.handle(channel, async (_event, payload) => {

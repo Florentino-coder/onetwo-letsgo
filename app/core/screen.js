@@ -70,9 +70,10 @@ function receiverName(xml) {
 /**
  * Whether two names are one person's: 'same', 'other', or 'unknown' when they cannot be compared,
  * because one is missing or one is in Thai letters and the other is not. The first names must be
- * the same; the family names too when both sides give one.
+ * the same; the family names too when both sides give one. With `needFamily`, a family name the
+ * screen shows and the job does not give makes the names 'unknown' rather than the same.
  */
-function compareNames(shown, wanted) {
+function compareNames(shown, wanted, needFamily = false) {
   const [a, b] = [nameWords(shown), nameWords(wanted)];
   if (!a.length || !b.length || !/\p{L}/u.test(a.join('')) || !/\p{L}/u.test(b.join(''))) return 'unknown';
   const thai = (words) => /[\u0e00-\u0e7f]/.test(words.join(''));
@@ -83,6 +84,7 @@ function compareNames(shown, wanted) {
     if (!titles.some((title) => a[0] === title + b[0] || b[0] === title + a[0])) return 'other';
   }
   if (a.length > 1 && b.length > 1 && a.slice(1).join('') !== b.slice(1).join('')) return 'other';
+  if (needFamily && a.length > 1 && b.length === 1) return 'unknown';
   return 'same';
 }
 

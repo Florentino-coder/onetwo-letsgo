@@ -74,6 +74,11 @@ test('two names are one person\'s whatever the title, and a family name counts w
   assert.equal(screen.compareNames('MR. TEST SYSTEM', 'Mr Test  System'), 'same');
   assert.equal(screen.compareNames('นาย ทดสอบ ระบบ', 'นาย ทดลอง ระบบ'), 'other');
   assert.equal(screen.compareNames('นาย ทดสอบ ระบบ', 'นาย ทดสอบ ระบบงาน'), 'other');
+  // A family name only the screen shows is let through, or with the stricter setting cannot be compared.
+  assert.equal(screen.compareNames('นาย ทดสอบ ระบบ', 'ทดสอบ'), 'same');
+  assert.equal(screen.compareNames('นาย ทดสอบ ระบบ', 'ทดสอบ', true), 'unknown');
+  assert.equal(screen.compareNames('นาย ทดสอบ', 'ทดสอบ ระบบ', true), 'same');
+  assert.equal(screen.compareNames('นาย ทดสอบ ระบบ', 'ทดสอบ ระบบ', true), 'same');
   // Not comparable: no name on one side, or Thai letters against Latin ones.
   assert.equal(screen.compareNames('', 'นาย ทดสอบ ระบบ'), 'unknown');
   assert.equal(screen.compareNames('นาย ทดสอบ ระบบ', '-'), 'unknown');
