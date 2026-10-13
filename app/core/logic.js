@@ -512,6 +512,16 @@ function maskAgrees(masked, account) {
   return shown.length > 0 && shown.length === whole.length && /\d/.test(shown) && [...shown].every((char, index) => char === 'x' || char === whole[index]);
 }
 
+/**
+ * A slip's text with the letter O read as the digit 0 where it stands in an account whose middle
+ * is hidden: the reader takes the 0 of 04xxxx2581 for an O now and then.
+ */
+function slipDigits(text) {
+  const mask = `[${SLIP_MASK}]`;
+  // Only a whole word of digits, hidden marks and Os is such an account: "Oxxford" is not.
+  return String(text || '').replace(new RegExp(`(?<![A-Za-z0-9])[0-9Oo]*${mask}{2,}[0-9Oo]*(?![A-Za-z0-9])`, 'g'), (word) => word.replace(/[Oo]/g, '0'));
+}
+
 /** True when an account number begins and ends as a slip's account, read with its middle unsure, does. */
 function endsAgree(shown, account) {
   const [, head, tail] = String(shown || '').match(/^(\d{2,})x+(\d{4,})$/) || [];
@@ -526,7 +536,7 @@ function endsAgree(shown, account) {
  * does not show clearly is '', never a guess.
  */
 function parseSlip(text) {
-  const lines = String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const lines = slipDigits(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const slip = {
     amount: '',
     sender_account_masked: '', sender_account_last4: '', bank: '', bank_name_th: '',
@@ -1086,6 +1096,7 @@ module.exports = {
   screenShows,
   verifyScreen,
   parseSlip,
+  slipDigits,
   endsAgree,
   bankCode,
   findUiText,

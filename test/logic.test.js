@@ -614,3 +614,14 @@ test('a slip whose hidden digits were read as other letters, and steps for a key
   assert.equal(logic.findUiId(xml, 'gone'), null);
   assert.equal(logic.findUiId(xml, 'EditText'), null);
 });
+
+test('a slip whose account begins with a 0 read as the letter O', () => {
+  const text = ['รายการโอนเงินสำเร็จ', 'จำนวนเงิน', '518.00', 'ธนาคารออมสิน', '0204xxxx9590', 'ธนาคารกสิกรไทย', 'O4xxxx258O', 'QR Code'].join('\n');
+  const slip = logic.parseSlip(text);
+  assert.equal(slip.receiver_account_masked, '04xxxx2580');
+  assert.equal(slip.receiver_bank, 'KBANK');
+  assert.equal(logic.screenShows(logic.slipDigits(text), '0412342580'), true);
+  assert.equal(logic.screenShows(logic.slipDigits(text), '0412342581'), false);
+  // An O in a word is left alone.
+  assert.equal(logic.slipDigits('QR Code Oxxford TOxxx12'), 'QR Code Oxxford TOxxx12');
+});

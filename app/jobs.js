@@ -1801,7 +1801,7 @@ function createJobs(host) {
       const wrong = [];
       if (!slip.amount || Number(slip.amount) !== Number(order.amount)) wrong.push(`the amount (slip ${slip.amount || 'unread'}, row ${order.amount})`);
       // An account whose hidden digits the reader misread is known by its ends only.
-      if (!logic.screenShows(read.text, order.account) && !(slip.receiver_account_loose && logic.endsAgree(slip.receiver_account_masked, order.account))) wrong.push('the account paid to');
+      if (!logic.screenShows(logic.slipDigits(read.text), order.account) && !(slip.receiver_account_loose && logic.endsAgree(slip.receiver_account_masked, order.account))) wrong.push('the account paid to');
       // The slip must come from this phone's own account: another account means another phone or app paid.
       if (phone.account && !logic.maskAgrees(slip.sender_account_masked, phone.account)) wrong.push(`the paying account (slip ${slip.sender_account_masked || 'unread'})`);
       if (phone.bank && logic.bankCode(phone.bank) && slip.bank && logic.bankCode(phone.bank) !== slip.bank) wrong.push(`the paying bank (slip ${slip.bank})`);
