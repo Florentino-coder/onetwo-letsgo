@@ -586,3 +586,31 @@ test('parseSlip reads an amount whose comma the reader took for a dot', () => {
   assert.equal(logic.parseSlip('รายการสำเร็จ\n1.234.567.00 บาท').amount, '1234567.00');
   assert.equal(logic.parseSlip('รายการสำเร็จ\n739.50 บาท').amount, '739.50');
 });
+
+test('a slip whose hidden digits were read as other letters, and steps for a keypad and a field the app names', () => {
+  const slip = logic.parseSlip(['รายการโอนเงินสำเร็จ', 'จำนวนเงิน', '300.00', 'นางสาว ก ข', 'ธนาคารออมสิน', '0204xxxx9590', 'นางสาว ค ง', 'ธนาคารไทยพาณิชย์', '74๒๐๐%2354'].join('\n'));
+  assert.equal(slip.amount, '300.00');
+  assert.equal(slip.sender_account_masked, '0204xxxx9590');
+  assert.equal(slip.bank, 'GSB');
+  assert.equal(slip.receiver_account_masked, '74xxxx2354');
+  assert.equal(slip.receiver_bank, 'SCB');
+  assert.equal(slip.receiver_account_loose, true);
+  assert.equal(slip.sender_account_loose, undefined);
+  assert.equal(logic.endsAgree('74xxxx2354', '7412342354'), true);
+  assert.equal(logic.endsAgree('74xxx2354', '7412342354'), true);
+  assert.equal(logic.endsAgree('74xxxx2354', '7512342354'), false);
+  assert.equal(logic.endsAgree('74xxxx2354', '7412342355'), false);
+  assert.equal(logic.endsAgree('74xxxx2354', '742354'), false);
+  // Such a line counts only under a bank's name.
+  assert.equal(logic.parseSlip(['300.00', 'ธนาคารออมสิน', '0204xxxx9590', 'รหัส', '74๒๐๐%2354'].join('\n')).receiver_account_masked, '');
+
+  const steps = logic.expandWorkflow(logic.parseWorkflow('tapid pinTextView\npintext 200\nslidetext เลื่อนเพื่อส่ง'), [], {}, {}, '1234');
+  assert.deepEqual(steps.map((step) => step.command), ['tapid', 'taptext', 'wait', 'taptext', 'wait', 'taptext', 'wait', 'taptext', 'slidetext']);
+  assert.equal(steps.filter((step) => step.command === 'taptext').every((step) => step.secret), true);
+  assert.throws(() => logic.expandWorkflow(logic.parseWorkflow('pintext'), [], {}, {}, ''), /No PIN/);
+  assert.throws(() => logic.parseWorkflow('pintext abc'), /pintext/);
+  const xml = '<node text="" resource-id="com.app:id/amountEditText" bounds="[60,710][660,790]" /><node text="" resource-id="com.app:id/gone" bounds="[0,0][0,0]" />';
+  assert.deepEqual(logic.findUiId(xml, 'amountEditText'), { x: 360, y: 750 });
+  assert.equal(logic.findUiId(xml, 'gone'), null);
+  assert.equal(logic.findUiId(xml, 'EditText'), null);
+});

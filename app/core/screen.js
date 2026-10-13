@@ -31,6 +31,44 @@ function showsAccount(xml, account) {
   return labels(xml).some((label) => /^[\d\s-]+$/.test(label) && label.replace(/\D/g, '') === wanted);
 }
 
+/**
+ * True when the figure right under the label `under` is this amount. For a page that shows other
+ * money too, such as what is left in the paying account.
+ */
+function showsAmountUnder(xml, amount, under) {
+  const wanted = Number(String(amount).replace(/,/g, ''));
+  if (!Number.isFinite(wanted) || wanted <= 0) return false;
+  const tidy = (label) => label.replace(/[\u200b-\u200d\ufeff]/g, '').replace(/\s+/g, '').toLowerCase();
+  const list = labels(xml);
+  return list.some((label, index) => {
+    if (tidy(label) !== tidy(under)) return false;
+    const match = (list[index + 1] || '').match(/^([\d,]+(?:\.\d+)?)\s*(?:THB|บาท|฿)?$/i);
+    return Boolean(match) && Number(match[1].replace(/,/g, '')) === wanted;
+  });
+}
+
+/**
+ * Where to drag a "slide to confirm" bar that shows the words `wanted`: from its left end to its
+ * right end, as { from: [x, y], to: [x, y] } in pixels; null when the page has no such bar.
+ */
+function slideOf(xml, wanted) {
+  const tidy = (label) => label.replace(/[\u200b-\u200d\ufeff]/g, '').replace(/\s+/g, '').toLowerCase();
+  const nodes = [...String(xml).matchAll(/<node\s[^>]*>/g)].map(([node]) => ({
+    text: unescapeXml((node.match(/\stext="([^"]*)"/) || [])[1] || ''),
+    kind: (node.match(/\sclass="([^"]*)"/) || [])[1] || '',
+    box: (node.match(/\sbounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"/) || []).slice(1).map(Number),
+  })).filter((node) => node.box.length === 4 && node.box[2] > node.box[0] && node.box[3] > node.box[1]);
+  const words = nodes.find((node) => node.text && tidy(node.text) === tidy(wanted));
+  if (!words) return null;
+  const [x, y] = [(words.box[0] + words.box[2]) / 2, Math.round((words.box[1] + words.box[3]) / 2)];
+  // The bar is the seek bar the words lie on; the smallest, should one lie in another.
+  const bars = nodes.filter((node) => /SeekBar$/.test(node.kind) && node.box[0] <= x && x <= node.box[2] && node.box[1] <= y && y <= node.box[3])
+    .sort((a, b) => (a.box[2] - a.box[0]) - (b.box[2] - b.box[0]));
+  if (!bars.length) return null;
+  const [left, top, right, bottom] = bars[0].box;
+  return { from: [left + Math.round((bottom - top) / 2), y], to: [right - 8, y] };
+}
+
 /** True when the screen shows this amount of money: "1,500.00 THB" is 1500. */
 function showsAmount(xml, amount) {
   const wanted = Number(String(amount).replace(/,/g, ''));
@@ -45,6 +83,8 @@ function showsAmount(xml, amount) {
 const NAME_TITLES = ['นางสาว', 'น.ส.', 'นส.', 'นาย', 'นาง', 'เด็กชาย', 'เด็กหญิง', 'ด.ช.', 'ด.ญ.', 'คุณ', 'mister', 'mrs.', 'mrs', 'miss', 'mr.', 'mr', 'ms.', 'ms'];
 // The label a bank app puts before the account a transfer goes to.
 const RECEIVER_LABELS = ['ไปที่', 'ไปยัง', 'to'];
+// Looked for only on a page with none of those: another bank app's word for the same.
+const RECEIVER_LABELS_ALSO = ['ถึง'];
 
 /** A name as its words, without a title before it, written one way: no marks apart, no capitals. */
 function nameWords(name) {
@@ -61,7 +101,9 @@ function nameWords(name) {
 /** The name of the person a transfer goes to, as the page shows it after its "to" label; '' when it shows none. */
 function receiverName(xml) {
   const list = labels(xml);
-  const at = list.findIndex((label) => RECEIVER_LABELS.includes(label.toLowerCase()));
+  const tidy = (label) => label.replace(/[\u200b-\u200d\ufeff]/g, '').trim().toLowerCase();
+  const first = list.findIndex((label) => RECEIVER_LABELS.includes(label.toLowerCase()));
+  const at = first >= 0 ? first : list.findIndex((label) => RECEIVER_LABELS_ALSO.includes(tidy(label)));
   const name = at < 0 ? '' : list[at + 1] || '';
   // A number there is an account, not a name.
   return /\p{L}/u.test(name) && !/^[\d\s-]+$/.test(name) ? name : '';
@@ -93,4 +135,4 @@ function gist(xml, count = 5) {
   return labels(xml).filter((label) => label.length > 1).slice(0, count).map((label) => label.replace(/\d{3,}/g, '#').slice(0, 40)).join(' | ');
 }
 
-module.exports = { labels, showsAccount, showsAmount, gist, receiverName, compareNames };
+module.exports = { labels, showsAccount, showsAmount, showsAmountUnder, slideOf, gist, receiverName, compareNames };

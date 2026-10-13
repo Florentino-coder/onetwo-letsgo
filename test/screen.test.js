@@ -90,3 +90,26 @@ test('checkname is a step that takes the fourth value of a job', () => {
   assert.equal(logic.workflowInputs(steps), 4);
   assert.equal(logic.expandWorkflow(steps, ['3330444555', '1500.00', 'ธนาคารกสิกรไทย', 'นาย ทดสอบ ระบบ'], {}, {}, '')[1].argument, 'นาย ทดสอบ ระบบ');
 });
+
+test('another bank app: the receiver after its own label, the amount under a label, and a bar to slide', () => {
+  const node = (text, box, kind = 'android.widget.TextView') => `<node text="${text}" class="${kind}" bounds="${box}" />`;
+  const confirm = [
+    node('จำนวนเงิน', '[23,192][697,230]'), node('500.00', '[23,230][697,303]'), node('0.00 ค่าธรรมเนียม', '[23,303][697,341]'),
+    node('จาก', '[168,441][652,479]'), node('นางสาว ผู้โอน ทดสอบ', '[168,479][652,539]'), node('0204xxxx9590', '[168,543][652,579]'), node('605.04', '[168,583][652,617]'),
+    node('ถึง', '[168,677][652,715]'), node('น.ส. ผู้รับ ระบบ', '[168,715][652,775]'), node('ธนาคารกรุงเทพ', '[168,779][652,819]'), node('1234567890', '[168,819][652,855]'),
+  ].join('');
+  assert.equal(screen.receiverName(confirm), 'น.ส. ผู้รับ ระบบ');
+  assert.equal(screen.compareNames(screen.receiverName(confirm), 'ผู้รับ ระบบ'), 'same');
+  // The first app's own label is taken before this one, on a page that has both.
+  assert.equal(screen.receiverName(node('ถึง', '[0,0][9,9]') + node('คนแรก', '[0,9][9,19]') + node('ไปที่', '[0,19][9,29]') + node('คนที่สอง', '[0,29][9,39]')), 'คนที่สอง');
+  // What is left in the paying account is not the amount paid.
+  assert.equal(screen.showsAmount(confirm, '605.04'), true);
+  assert.equal(screen.showsAmountUnder(confirm, '605.04', 'จำนวนเงิน'), false);
+  assert.equal(screen.showsAmountUnder(confirm, '500', 'จำนวนเงิน'), true);
+  assert.equal(screen.showsAmountUnder(confirm, '500', 'ยอด'), false);
+
+  const page = node('', '[128,1414][592,1510]', 'android.widget.SeekBar') + node('เลื่อนเพื่อส่ง', '[289,1439][472,1490]');
+  assert.deepEqual(screen.slideOf(page, 'เลื่อนเพื่อส่ง'), { from: [176, 1465], to: [584, 1465] });
+  assert.equal(screen.slideOf(page, 'ยืนยัน'), null);
+  assert.equal(screen.slideOf(node('เลื่อนเพื่อส่ง', '[289,1439][472,1490]'), 'เลื่อนเพื่อส่ง'), null);
+});

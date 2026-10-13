@@ -78,6 +78,10 @@ const DEFAULTS = {
   apiSettlementPath: '/bo/withdrawal-settlement-search?%24limit=100&%24skip=0',
   // A "checkname" step of the paying workflow compares the name on the bank app's confirm page
   // with the name of the job. Off, such a step passes without looking.
+  // The bank whose app the workflows above drive, as its code ("BBL"). Set, a phone that pays from
+  // another bank runs the set `flows` has for that bank, or nothing when there is none. Empty,
+  // every phone runs the workflows above.
+  bank: '',
   checkName: true,
   // On, a family name the confirm page shows must be checked too: a job that gives none is passed over.
   checkFamily: false,
@@ -530,6 +534,21 @@ const recordScript = (token) => `(() => {
 const STOP_RECORD_SCRIPT = 'window.__adbRecordStop && window.__adbRecordStop()';
 
 /** Recorded clicks as { selector, text, tag, wait }. `text` and `tag` are '' for a click with no words. */
+/**
+ * The workflows of other banks' apps, as saved, cleaned: { GSB: { workflow, enter, again, expect, stay } }.
+ * A set names its paying workflow; the rest may be left out.
+ */
+function cleanFlows(raw) {
+  const flows = {};
+  for (const [code, flow] of Object.entries(raw && typeof raw === 'object' ? raw : {})) {
+    if (!logic.BANKS.some((bank) => bank.code === code) || !flow || typeof flow !== 'object') continue;
+    const word = (key) => (typeof flow[key] === 'string' ? flow[key].trim().slice(0, 500) : '');
+    if (!word('workflow')) continue;
+    flows[code] = { workflow: word('workflow'), enter: word('enter'), again: word('again'), expect: word('expect'), stay: Math.min(3600, Math.max(0, Math.round(flow.stay) || 0)) };
+  }
+  return flows;
+}
+
 function cleanSteps(steps) {
   return steps
     .filter((step) => step && typeof step.selector === 'string' && step.selector.trim())
@@ -581,6 +600,7 @@ function createJobs(host) {
     }
     merged.interval = Math.min(600, Math.max(2, Math.round(merged.interval) || DEFAULTS.interval));
     merged.stay = Math.min(3600, Math.max(0, Math.round(merged.stay) || 0));
+    merged.flows = cleanFlows(saved.flows);
     for (const which of RECORDINGS) {
       // A single button recorded by an older version is a recording of one click.
       const legacy = typeof saved[which] === 'string' && saved[which] ? [{ selector: saved[which] }] : [];
@@ -615,6 +635,10 @@ function createJobs(host) {
       checking: host.watched().filter(checking).map((phone) => phone.serial),
       // The banks no phone pays to for now, by code.
       skipBanks: host.skipBanks(),
+      // The banks whose app there are workflows for, by code: the one the main workflows drive first.
+      payBanks: [config().bank, ...Object.keys(config().flows)].filter(Boolean),
+      // The phones that pay from a bank whose app there are no workflows for.
+      noFlow: host.watched().filter((phone) => noFlow(config(), phone)).map((phone) => phone.serial),
       // The shop's accounts as the back office lists them, by account number.
       accounts: { at: accounts.at, note: accounts.note, error: accounts.error || '', fresh: accounts.note === 'ok' && Date.now() - accounts.at <= ACCOUNTS_FRESH_MS, map: accounts.map },
       // What each phone began to pay today, online or not.
@@ -896,7 +920,9 @@ function createJobs(host) {
     if (!current.rest || !current.enter || !current.stay || working || host.busy()) return;
     const text = host.store.state.workflows[current.rest];
     if (!text) return;
-    const idle = [...lastGood.keys()].filter((serial) => !paying.has(serial) && Date.now() - lastGood.get(serial) >= current.stay * 1000);
+    // A phone that runs another bank's set has no rest among these workflows.
+    const others = new Set(host.phones().filter((phone) => current.flows[logic.bankCode(phone.bank)]).map((phone) => phone.serial));
+    const idle = [...lastGood.keys()].filter((serial) => !others.has(serial) && !paying.has(serial) && Date.now() - lastGood.get(serial) >= current.stay * 1000);
     if (!idle.length) return;
     // Rested or not, these phones are no longer taken to be on the paying screen.
     for (const serial of idle) lastGood.delete(serial);
@@ -1510,9 +1536,22 @@ function createJobs(host) {
   }
 
   /** Why a phone in range cannot pay this amount now, or '' when it can. */
+  /** The job settings as they are for one phone: with the workflows of its bank's app, when that bank has a set. */
+  function flowOf(current, phone) {
+    const own = current.flows[logic.bankCode(phone.bank)];
+    return own ? { ...current, ...own } : current;
+  }
+
+  /** True when a phone pays from a bank whose app no workflows are held for. */
+  function noFlow(current, phone) {
+    const code = logic.bankCode(phone.bank);
+    return Boolean(current.bank) && Boolean(code) && code !== current.bank && !current.flows[code];
+  }
+
   function shortOf(phone, value) {
     if (stops()[phone.serial]) return 'stopped';
     if (checking(phone)) return 'checking';
+    if (noFlow(config(), phone)) return 'noflow';
     // An account the back office does not list cannot be seen to be on, and a row paid from it could not be closed.
     if (unlisted(phone)) return 'missing';
     if (phone.cap !== null && spentToday(phone.serial) + value > phone.cap) return 'cap';
@@ -1721,6 +1760,10 @@ function createJobs(host) {
       throw new Error(`No online phone can pay ${listed.amount} now.`);
     }
     const serial = phone.serial;
+    // The workflows of this phone's bank.
+    const flow = flowOf(current, phone);
+    const flowText = host.store.state.workflows[flow.workflow];
+    if (!flowText) throw new Error(`The workflow "${flow.workflow}" that ${phone.label} pays with is not saved.`);
     // The row and the phone are taken from here on, before anything is waited for.
     const mine = { key, amount: listed.amount, bank: listed.bank, state: 'running', at: Date.now() };
     paying.set(serial, mine);
@@ -1742,11 +1785,11 @@ function createJobs(host) {
       // From here on the phone is touched: every fault is a stop.
       begun = true;
       mark(order, 'started', { serial, phone: phone.label });
-      audit('start', key, { ...order, serial, phone: phone.label, workflow: current.workflow });
+      audit('start', key, { ...order, serial, phone: phone.label, workflow: flow.workflow });
       stage('running');
       const since = await host.phoneClock(serial);
       // The fourth value is the name of the account's holder, for a workflow that checks it; a job without one sends a dash.
-      await runOnPhone(current, text, serial, [order.account, typedAmount(order.amount), order.bank, order.holder || '-'], key);
+      await runOnPhone(flow, flowText, serial, [order.account, typedAmount(order.amount), order.bank, order.holder || '-'], key);
       audit('workflow', key, { serial });
 
       stage('checking');
@@ -1757,11 +1800,12 @@ function createJobs(host) {
       const slip = logic.parseSlip(read.text);
       const wrong = [];
       if (!slip.amount || Number(slip.amount) !== Number(order.amount)) wrong.push(`the amount (slip ${slip.amount || 'unread'}, row ${order.amount})`);
-      if (!logic.screenShows(read.text, order.account)) wrong.push('the account paid to');
+      // An account whose hidden digits the reader misread is known by its ends only.
+      if (!logic.screenShows(read.text, order.account) && !(slip.receiver_account_loose && logic.endsAgree(slip.receiver_account_masked, order.account))) wrong.push('the account paid to');
       // The slip must come from this phone's own account: another account means another phone or app paid.
       if (phone.account && !logic.maskAgrees(slip.sender_account_masked, phone.account)) wrong.push(`the paying account (slip ${slip.sender_account_masked || 'unread'})`);
       if (phone.bank && logic.bankCode(phone.bank) && slip.bank && logic.bankCode(phone.bank) !== slip.bank) wrong.push(`the paying bank (slip ${slip.bank})`);
-      wrong.push(...logic.verifyScreen(read.text, [], current.expect));
+      wrong.push(...logic.verifyScreen(read.text, [], flow.expect));
       audit('slip', key, { serial, file: read.file, slip, agrees: !wrong.length, wrong });
       if (wrong.length) throw new Error(`The slip does not agree on ${wrong.join(', ')}. Picture: ${read.file}`);
       mark(order, 'paid', { slip: read.file });

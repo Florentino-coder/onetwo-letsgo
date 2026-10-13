@@ -10,7 +10,8 @@ const { isNewer } = require('./version.js');
 
 const MAX_PACK_BYTES = 2 * 1024 * 1024;
 // The settings of a job that belong to how the workflows fit together, and so travel with them.
-const JOB_KEYS = ['workflow', 'enter', 'again', 'rest', 'stay', 'expect'];
+// `bank` and `flows`: the bank whose app those workflows drive, and the workflows of other banks' apps.
+const JOB_KEYS = ['workflow', 'enter', 'again', 'rest', 'stay', 'expect', 'bank', 'flows'];
 
 /**
  * Check a pack's content and give it its full shape. Throws, naming what is wrong: a pack that
@@ -36,6 +37,11 @@ function normalize(content) {
   if (!jobs.workflow || !workflows[jobs.workflow]) throw new Error('A pack names the workflow that pays, and holds it.');
   for (const key of ['enter', 'again', 'rest']) {
     if (jobs[key] && !workflows[jobs[key]]) throw new Error(`The pack names "${jobs[key]}" for ${key}, but does not hold it.`);
+  }
+  for (const [code, flow] of Object.entries(jobs.flows && typeof jobs.flows === 'object' ? jobs.flows : {})) {
+    for (const key of ['workflow', 'enter', 'again']) {
+      if (flow && flow[key] && !workflows[flow[key]]) throw new Error(`The pack names "${flow[key]}" for ${code}, but does not hold it.`);
+    }
   }
   const pickSets = {};
   for (const [key, set] of Object.entries(pack.pickSets || {})) pickSets[key] = logic.normalizePickSet(set);

@@ -45,13 +45,16 @@ function main() {
     }
   };
   for (const key of [jobs.workflow, jobs.enter, jobs.again, jobs.rest].filter(Boolean)) take(key);
+  // The workflows of other banks' apps.
+  for (const flow of Object.values(jobs.flows || {})) for (const key of [flow.workflow, flow.enter, flow.again].filter(Boolean)) take(key);
 
   const profile = read('app/closejob/profiles/closejob_v1.json');
   const text = pack.build({
     name, version,
     // A pack runs on the program that was current when it was built, and on any newer one.
     // A pack asks for the oldest program that knows every step it uses.
-    minApp: Object.values(workflows).some((text) => text.split(/\r?\n/).some((each) => each.trim().split(' ')[0] === 'checkname')) ? '0.25.0'
+    minApp: Object.keys(jobs.flows || {}).length || Object.values(workflows).some((text) => text.split(/\r?\n/).some((each) => ['slidetext', 'tapid', 'pintext'].includes(each.trim().split(' ')[0]))) ? '0.26.0'
+      : Object.values(workflows).some((text) => text.split(/\r?\n/).some((each) => each.trim().split(' ')[0] === 'checkname')) ? '0.25.0'
       : Object.values(workflows).some((text) => text.split(/\r?\n/).some((each) => ['scrolltap', 'waittext', 'checktext', 'checkamount', 'stoptext'].includes(each.trim().split(' ')[0]))) ? '0.24.0'
       : Object.values(workflows).some((text) => text.split(/\r?\n/).some((each) => ['taptext', 'taptext?'].includes(each.trim().split(' ')[0]))) ? '0.23.0' : '0.21.0',
     workflows, pickSets,

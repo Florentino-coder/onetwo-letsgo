@@ -9,9 +9,9 @@ const KEY_ALIASES = {
   wake: 'KEYCODE_WAKEUP',
   sleep: 'KEYCODE_SLEEP',
 };
-const WORKFLOW_COMMANDS = new Set(['wait', 'keyevent', 'open', 'text', 'screenshot', 'tap', 'swipe', 'run', 'pick', 'pin', 'close', 'taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checkamount', 'checkname', 'stoptext', ...Object.keys(KEY_ALIASES)]);
+const WORKFLOW_COMMANDS = new Set(['wait', 'keyevent', 'open', 'text', 'screenshot', 'tap', 'swipe', 'run', 'pick', 'pin', 'close', 'taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checkamount', 'checkname', 'stoptext', 'slidetext', 'tapid', 'pintext', ...Object.keys(KEY_ALIASES)]);
 // Steps that read the phone's screen for words or values.
-const SCREEN_COMMANDS = ['taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checkamount', 'checkname', 'stoptext'];
+const SCREEN_COMMANDS = ['taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checkamount', 'checkname', 'stoptext', 'slidetext', 'tapid'];
 // Steps whose argument may hold {1}, {2}… of a job.
 const FILLED_COMMANDS = ['text', 'run', 'pick', ...SCREEN_COMMANDS];
 const DEFAULT_SWIPE_MS = 300;
@@ -303,6 +303,8 @@ function parseWorkflow(text) {
       if (!argument) throw new Error(`Line ${lineNo}: ${command} expects the words to look for, for example '${command} โอนเงิน'.`);
     } else if (command === 'run') {
       if (!argument) throw new Error(`Line ${lineNo}: run expects the name of a saved workflow, for example 'run bank-{3}'.`);
+    } else if (command === 'pintext') {
+      if (!/^\d{0,5}$/.test(argument)) throw new Error(`Line ${lineNo}: pintext takes nothing, or the wait between keys in milliseconds, for example 'pintext 300'.`);
     } else if (command === 'pin') {
       if (!parsePin(argument)) throw new Error(`Line ${lineNo}: pin expects the keypad's position set, for example 'pin keypad'.`);
     } else if (command === 'pick') {
@@ -478,6 +480,11 @@ function slipBank(line) {
   return found ? { code: found[0], name: found[1] } : null;
 }
 
+// Under a bank's name a slip prints the account. The reader now and then takes the marks that
+// hide its middle digits for other letters ("74๒๐๐%2354" for 74xxxx2354): digits, a few letters
+// that are not digits, and four digits are such an account.
+const SLIP_LOOSE_ACCOUNT_RE = /^(\d{2,4})([^\s\d]{2,7})(\d{4})$/;
+
 function slipAccount(line) {
   if (SLIP_FEE_RE.test(line) || SLIP_REFERENCE_RE.test(line)) return '';
   for (const pattern of SLIP_ACCOUNT_RES) {
@@ -505,6 +512,13 @@ function maskAgrees(masked, account) {
   return shown.length > 0 && shown.length === whole.length && /\d/.test(shown) && [...shown].every((char, index) => char === 'x' || char === whole[index]);
 }
 
+/** True when an account number begins and ends as a slip's account, read with its middle unsure, does. */
+function endsAgree(shown, account) {
+  const [, head, tail] = String(shown || '').match(/^(\d{2,})x+(\d{4,})$/) || [];
+  const whole = String(account || '').replace(/\D/g, '');
+  return Boolean(head) && whole.length > head.length + tail.length && whole.startsWith(head) && whole.endsWith(tail);
+}
+
 /**
  * What a transfer slip says, from its recognized text: the amount, and for the paying ("sender")
  * and the paid ("receiver") side the account as printed with hidden digits as x, its last four
@@ -526,10 +540,18 @@ function parseSlip(text) {
 
   const accounts = [];
   lines.forEach((line, index) => {
-    const token = slipAccount(line);
+    let token = slipAccount(line);
+    let loose = false;
+    if (!token && index > 0 && slipBank(lines[index - 1])) {
+      const [, head, hidden, tail] = line.replace(/\s/g, '').match(SLIP_LOOSE_ACCOUNT_RE) || [];
+      if (head) {
+        token = `${head}${'x'.repeat(hidden.length)}${tail}`;
+        loose = true;
+      }
+    }
     // A number under a "reference" label is the reference, however much it looks like an account.
     const reference = index > 0 && SLIP_REFERENCE_RE.test(lines[index - 1]) && /^\d+$/.test(token);
-    if (token && !reference) accounts.push({ index, token });
+    if (token && !reference) accounts.push({ index, token, loose });
   });
   // Anything other than exactly two accounts cannot be told apart as payer and paid.
   if (accounts.length !== 2) return slip;
@@ -541,6 +563,8 @@ function parseSlip(text) {
     // Only digits printed together at the end are the account's real last digits.
     const [tail] = shown.match(/\d+$/) || [''];
     slip[`${side}_account_last4`] = tail.length >= 4 ? tail.slice(-4) : '';
+    // How many digits were hidden is not known of an account read this way: only its ends are.
+    if (account.loose) slip[`${side}_account_loose`] = true;
     // The bank is on the account's own line or the nearest line to it, on this side of the other account.
     const other = accounts[1 - position].index;
     const mine = (index) => index >= 0 && index < lines.length && (position ? index > other : index < other);
@@ -780,6 +804,10 @@ function expandWorkflow(steps, values, workflows, sets, pin, trail = []) {
       flat.push(...pinSteps(step, sets, pin));
       continue;
     }
+    if (step.command === 'pintext') {
+      flat.push(...pinTextSteps(step, pin));
+      continue;
+    }
     if (step.command !== 'run') {
       flat.push(step);
       continue;
@@ -920,6 +948,39 @@ function pinSteps(step, sets, pin) {
   return steps;
 }
 
+/**
+ * The steps of one `pintext` step: for each digit of the phone's PIN, a tap on the key that shows
+ * that digit. For a keypad whose keys the view tree names, so no positions are kept for it. Each
+ * step is marked `secret`.
+ */
+function pinTextSteps(step, pin) {
+  if (!isPin(pin)) throw new Error('No PIN is set for this phone.');
+  const gap = step.argument ? Number(step.argument) : DEFAULT_PIN_GAP_MS;
+  const steps = [];
+  for (const digit of pin) {
+    if (steps.length) steps.push({ ...step, command: 'wait', argument: String(gap), note: '' });
+    steps.push({ ...step, command: 'taptext', argument: digit, note: 'PIN', secret: true });
+  }
+  return steps;
+}
+
+/**
+ * Where to tap for the thing a phone's view tree names `id` (the last part of its resource-id,
+ * such as "amountEditText"): { x, y } in pixels, or null. For a field that shows no words of its own.
+ */
+function findUiId(xml, id) {
+  const wanted = String(id || '').trim();
+  if (!/^[\w.]+$/.test(wanted)) return null;
+  for (const [node] of String(xml).matchAll(/<node\s[^>]*>/g)) {
+    const named = (node.match(/\sresource-id="([^"]*)"/) || [])[1] || '';
+    if (named.split('/').pop() !== wanted) continue;
+    const bounds = (node.match(/\sbounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"/) || []).slice(1).map(Number);
+    if (bounds.length !== 4 || bounds[2] <= bounds[0] || bounds[3] <= bounds[1]) continue;
+    return { x: Math.round((bounds[0] + bounds[2]) / 2), y: Math.round((bounds[1] + bounds[3]) / 2) };
+  }
+  return null;
+}
+
 /** The steps of one `pick` step: scroll to the name's page, then tap it. */
 function pickSteps(step, sets) {
   const wanted = parsePick(step.argument);
@@ -1025,8 +1086,10 @@ module.exports = {
   screenShows,
   verifyScreen,
   parseSlip,
+  endsAgree,
   bankCode,
   findUiText,
+  findUiId,
   maskAgrees,
   parseWithdrawRow,
   withdrawFromApi,

@@ -48,7 +48,9 @@ const SCROLLTAP_PAGES = 6;
 // A read of a phone's screen is slow (seconds). Steps that only look share one read; any step
 // that touches the phone, or waits, throws it away.
 const SCREEN_FRESH_MS = 8000;
-const SCREEN_STEPS = new Set(['taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checkamount', 'checkname', 'stoptext']);
+const SCREEN_STEPS = new Set(['taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checkamount', 'checkname', 'stoptext', 'slidetext', 'tapid']);
+// How long the drag of a "slide to confirm" bar takes.
+const SLIDE_MS = 700;
 const screens = new Map();
 
 async function screenOf(serial, again) {
@@ -89,7 +91,8 @@ function applyPack() {
   store.state.workflows = packInUse ? { ...packInUse.workflows } : {};
   store.state.pick_sets = packInUse ? { ...packInUse.pickSets } : {};
   const kept = store.config.jobs && typeof store.config.jobs === 'object' ? store.config.jobs : {};
-  store.config.jobs = { ...kept, workflow: '', enter: '', again: '', rest: '', ...(packInUse ? packInUse.jobs : {}), ...USER_JOB_FIXED };
+  // What one pack set and the next does not name is not kept from the first.
+  store.config.jobs = { ...kept, workflow: '', enter: '', again: '', rest: '', bank: '', flows: {}, ...(packInUse ? packInUse.jobs : {}), ...USER_JOB_FIXED };
 }
 if (USER) {
   applyPack();
@@ -822,7 +825,9 @@ async function runWorkflowStep(device, step, workflowName) {
     case 'checktext':
     case 'checkamount': {
       // Before a button that moves money is pressed, the page must show the job's own values.
-      const shows = step.command === 'checkamount' ? screen.showsAmount : (xml, value) => (/^[\d\s-]{6,}$/.test(value) ? screen.showsAccount(xml, value) : Boolean(logic.findUiText(xml, value)));
+      // "checkamount 500 จำนวนเงิน" takes only the figure under that label, on a page that shows other money too.
+      const [, figure, under] = step.command === 'checkamount' ? String(step.argument).match(/^(\S+)\s+(\S.*)$/) || [] : [];
+      const shows = under ? (xml) => screen.showsAmountUnder(xml, figure, under) : step.command === 'checkamount' ? screen.showsAmount : (xml, value) => (/^[\d\s-]{6,}$/.test(value) ? screen.showsAccount(xml, value) : Boolean(logic.findUiText(xml, value)));
       const until = Date.now() + TAPTEXT_WAIT_MS * payAccount(serial).scale;
       for (let look = 0; ; look += 1) {
         if (shows(await screenOf(serial, look > 0), step.argument)) return 'shown';
@@ -831,6 +836,33 @@ async function runWorkflowStep(device, step, workflowName) {
       }
       // The value is the job's, not the screen's: saying it tells nothing the job did not.
       throw new Error(step.command === 'checkamount' ? `The phone's screen does not show the amount ${step.argument}. Nothing was confirmed.` : `The phone's screen does not show "${String(step.argument).replace(/\d(?=\d{4})/g, 'x')}". Nothing was confirmed.`);
+    }
+    case 'slidetext':
+    case 'tapid': {
+      await guard(serial, workflowName);
+      // A bar that is dragged to go on, found by the words on it; or a field with no words, found by the name the app gives it.
+      const slides = step.command === 'slidetext';
+      const until = Date.now() + TAPTEXT_WAIT_MS * payAccount(serial).scale;
+      let xml = '';
+      let fault = null;
+      for (let look = 0; ; look += 1) {
+        try {
+          xml = await screenOf(serial, look > 0);
+          const found = slides ? screen.slideOf(xml, step.argument) : logic.findUiId(xml, step.argument);
+          if (found) {
+            if (slides) await requireAdb().swipe(serial, ...found.from, ...found.to, SLIDE_MS);
+            else await requireAdb().tap(serial, found.x, found.y);
+            screens.delete(serial);
+            return slides ? `${found.from.join(' ')} to ${found.to.join(' ')} px` : `${found.x} ${found.y} px`;
+          }
+          fault = null;
+        } catch (error) {
+          fault = error;
+        }
+        if (Date.now() >= until) break;
+        await sleep(TAPTEXT_RETRY_MS);
+      }
+      throw new Error(fault ? `The screen could not be read: ${fault.message}` : `${slides ? `A bar to slide that says "${step.argument}"` : `"${step.argument}"`} is not on the screen. The screen says: ${screen.gist(xml) || 'nothing'}`);
     }
     case 'checkname': {
       // Before a button that moves money is pressed, the page must name the person the job names.
@@ -926,8 +958,10 @@ async function runWorkflowSteps(device, steps, run, workflowName) {
       const detail = await runWorkflowStep(device, step, workflowName);
       send('timeline', { ...entry, status: 'ok', at: started, ms: Date.now() - started, detail: step.secret ? '' : detail || '' });
     } catch (error) {
-      send('timeline', { ...entry, status: 'error', at: started, ms: Date.now() - started, detail: error.message });
-      throw new Error(`step ${index + 1} (${step.command}): ${error.message}`);
+      // A key of the PIN looked for by its digit must not be named by the fault either.
+      const message = step.secret && step.command === 'taptext' ? 'A key of the PIN is not on the screen.' : error.message;
+      send('timeline', { ...entry, status: 'error', at: started, ms: Date.now() - started, detail: message });
+      throw new Error(`step ${index + 1} (${step.command}): ${message}`);
     }
   }
   return `${steps.length} step(s)`;
