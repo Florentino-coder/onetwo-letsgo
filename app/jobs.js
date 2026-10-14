@@ -2060,14 +2060,37 @@ function createJobs(host) {
    * Rows of the whole history, newest first: `text` is looked for in the account number, the
    * account's name, the bank and the amount; `state` is a row's state; `day` is YYYY-MM-DD by
    * this computer's clock. At most 500 come back.
+   *
+   * With `page` (from 1) it answers one page of `size` rows instead, with how many rows there are
+   * in all and, for the same words and day whatever the state, how many rows and how much money
+   * each state has: { rows, total, page, pages, tally: { done: { count, sum } } }.
    */
-  function search({ text, state, day } = {}) {
+  function search({ text, state, day, page, size } = {}) {
     const wanted = String(text || '').trim().toLowerCase();
     const digits = wanted.replace(/[\s,-]/g, '');
     const local = (at) => {
       const date = new Date(at);
       return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     };
+    if (page !== undefined) {
+      const matches = ([, entry]) => !wanted || [entry.holder, entry.bank, entry.phone].some((field) => String(field || '').toLowerCase().includes(wanted))
+        || (digits && [entry.account, String(entry.amount).replace(/,/g, '')].some((field) => String(field || '').includes(digits)));
+      const ofDay = Object.entries(ledger).filter(([, entry]) => !day || local(entry.at) === day).filter(matches);
+      const tally = {};
+      for (const [, entry] of ofDay) {
+        const one = tally[entry.state] || (tally[entry.state] = { count: 0, sum: 0 });
+        one.count += 1;
+        one.sum += Number(entry.amount) || 0;
+      }
+      const found = ofDay.filter(([, entry]) => !state || entry.state === state).sort((a, b) => String(b[1].at).localeCompare(String(a[1].at)));
+      const each = Math.min(200, Math.max(1, Math.round(size) || 20));
+      const pages = Math.max(1, Math.ceil(found.length / each));
+      const at = Math.min(pages, Math.max(1, Math.round(page) || 1));
+      return {
+        rows: found.slice((at - 1) * each, at * each).map(([key, entry]) => ({ key, ...entry, slip: slipOf(entry), bankCode: logic.bankCode(entry.bank) })),
+        total: found.length, page: at, pages, tally,
+      };
+    }
     return Object.entries(ledger)
       .filter(([, entry]) => (!state || entry.state === state) && (!day || local(entry.at) === day))
       .filter(([, entry]) => !wanted || [entry.holder, entry.bank, entry.phone].some((field) => String(field || '').toLowerCase().includes(wanted))

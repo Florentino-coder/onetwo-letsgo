@@ -3,11 +3,11 @@
 // The window of OneTwo ADB, the program handed to other people. Three pages: home, history,
 // settings. Everything used daily is on the home page. All text is Thai, the faults too.
 
-const S = { state: null, page: 'home', wizard: 'link', signedIn: false, busy: false, stale: false, find: { text: '', state: '', day: '' }, found: null };
+const S = { state: null, page: 'home', wizard: 'link', signedIn: false, busy: false, stale: false, find: { text: '', state: '', day: undefined, page: 1 }, found: null };
 const SPEEDS = [[1.5, 'ช้า (เครื่องหรือเน็ตช้า)'], [1, 'ปกติ'], [0.8, 'เร็ว'], [0.6, 'เร็วมาก']];
 const BANK = 'ธนาคารกรุงเทพ';
 const PHONE_STATE = { running: 'กำลังโอน', checking: 'อ่านสลิป', closing: 'ปิดงาน', resting: 'กำลังพัก' };
-const ROW_STATE = { started: ['ค้าง ต้องตรวจ', 'bad'], paid: ['จ่ายแล้ว รอปิดงาน', 'run'], done: ['ปิดงานแล้ว', 'ok'], failed: ['ไม่สำเร็จ', 'bad'], name: ['ชื่อไม่ตรง', 'bad'], resolved: ['จัดการแล้ว', 'wait'] };
+const ROW_STATE = { started: ['ค้าง ต้องตรวจ', 'bad'], paid: ['จ่ายแล้ว รอปิดงาน', 'run'], done: ['ปิดงานแล้ว', 'ok'], failed: ['ไม่สำเร็จ', 'bad'], name: ['ชื่อไม่ตรง', 'warn'], resolved: ['จัดการแล้ว', 'wait'] };
 const LICENSE_REASON = { missing: 'ยังไม่ได้ใส่รหัสเปิดใช้', forged: 'รหัสเปิดใช้ไม่ถูกต้อง', machine: 'รหัสนี้เป็นของคอมเครื่องอื่น', expired: 'รหัสเปิดใช้หมดอายุแล้ว', cancelled: 'รหัสเปิดใช้ถูกยกเลิก', offline: 'ต้องต่ออินเทอร์เน็ตเพื่อตรวจรหัสเปิดใช้' };
 
 // ── small tools ──────────────────────────────────────────────────────────
@@ -453,53 +453,84 @@ function historyRow(entry) {
       open ? h('button', { class: 'lk', onclick: () => act('jobs:resolve', { key: entry.key, note: 'ตรวจด้วยมือ' }, 'บันทึกว่าจัดการแล้ว') }, 'จัดการแล้ว') : null));
 }
 
-const searching = () => Boolean(S.find.text || S.find.state || S.find.day);
+// Today by this computer's clock, as a date field writes a day.
+const todayField = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
+const HISTORY_PAGE = 20;
+// The states a row ends in, in the order of their tiles, each with the colour its pill has.
+const HISTORY_TILES = ['done', 'paid', 'started', 'failed', 'name', 'resolved'];
 
-/** Fill the list of the history page from what it should show now, without drawing the page again. */
+/** Fill the tiles, the list and the pager of the history page from the last answer, without drawing the page again. */
 function drawHistoryList() {
   const list = $('history-list');
   if (!list) return;
-  const rows = searching() && S.found ? S.found : S.state.jobs.history;
-  list.replaceChildren(...(rows.length ? rows.map(historyRow) : [h('div', { class: 'empty' }, searching() ? 'ไม่พบรายการที่ตรงกับที่ค้นหา' : 'ยังไม่มีรายการ')]));
-  $('history-count').textContent = searching() ? `พบ ${rows.length} รายการ${rows.length === 500 ? ' (แสดง 500 รายการแรก)' : ''}` : `${rows.length} รายการล่าสุด`;
+  const found = S.found || { rows: [], total: 0, page: 1, pages: 1, tally: {} };
+  const day = S.find.day ? (S.find.day === todayField() ? 'วันนี้' : new Date(`${S.find.day}T00:00:00`).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })) : 'ทุกวัน';
+  // One tile for each state: how many rows and how much money, in the state's own colour. Pressing it shows those rows.
+  $('history-tiles').replaceChildren(...HISTORY_TILES.map((state) => {
+    const [name, kind] = ROW_STATE[state];
+    const one = found.tally[state] || { count: 0, sum: 0 };
+    return h('button', { class: `kpi t-${kind} ${one.count ? '' : 'zero'} ${S.find.state === state ? 'on' : ''}`, title: S.find.state === state ? 'กดอีกครั้งเพื่อดูทุกสถานะ' : 'กดเพื่อดูเฉพาะสถานะนี้',
+      onclick: () => { $('find-state').value = S.find.state === state ? '' : state; runFind(); } },
+      h('div', { class: 'l' }, name),
+      h('div', { class: 'v' }, String(one.count)),
+      h('div', { class: 's' }, `${whole(one.sum)} บาท`));
+  }));
+  list.replaceChildren(...(found.rows.length ? found.rows.map(historyRow) : [h('div', { class: 'empty' }, S.find.text || S.find.state ? 'ไม่พบรายการที่ตรงกับที่ค้นหา' : `ไม่มีรายการของ${day}`)]));
+  $('history-count').textContent = `${day} · ${found.total} รายการ`;
+  const go = (page) => { S.find.page = page; runFind(true); };
+  $('history-pager').replaceChildren(
+    h('button', { class: 'btn', disabled: found.page <= 1, onclick: () => go(found.page - 1) }, 'ก่อนหน้า'),
+    h('span', { class: 'hint' }, `หน้า ${found.page} จาก ${found.pages}`),
+    h('button', { class: 'btn', disabled: found.page >= found.pages, onclick: () => go(found.page + 1) }, 'ถัดไป'));
 }
 
 let findTimer = null;
-function runFind() {
+let findTurn = 0;
+/** Ask for the page of history the fields describe. A change of the fields goes back to the first page; `keep` stays on the page asked for. */
+function runFind(keep) {
   clearTimeout(findTimer);
   findTimer = setTimeout(async () => {
-    S.find = { text: $('find-text').value.trim(), state: $('find-state').value, day: $('find-day').value };
-    S.found = searching() ? await ask('history:search', S.find) : null;
+    if (!$('find-text')) return;
+    const fields = { text: $('find-text').value.trim(), state: $('find-state').value, day: $('find-day').value };
+    const same = fields.text === S.find.text && fields.state === S.find.state && fields.day === S.find.day;
+    S.find = { ...fields, page: keep === true || same ? S.find.page || 1 : 1 };
+    findTurn += 1;
+    const turn = findTurn;
+    const found = await ask('history:search', { ...S.find, size: HISTORY_PAGE });
+    // An older answer that comes back after a newer question is not shown.
+    if (turn !== findTurn || !found) return;
+    S.found = found;
+    S.find.page = found.page;
     drawHistoryList();
-  }, 250);
+  }, keep === true ? 0 : 250);
 }
 
 function history() {
-  const states = [['', 'ทุกสถานะ'], ['done', 'ปิดงานแล้ว'], ['paid', 'จ่ายแล้ว รอปิดงาน'], ['started', 'ค้าง ต้องตรวจ'], ['failed', 'ไม่สำเร็จ'], ['name', 'ชื่อไม่ตรง'], ['resolved', 'จัดการแล้ว']];
-  const today = S.state.jobs.history.filter((entry) => isToday(entry.at));
-  // Today's rows of one state, counted and added up. Pressing it shows those rows.
-  const tile = (name, state, bad) => {
-    const rows = today.filter((entry) => entry.state === state);
-    return h('button', { class: 'kpi', title: 'กดเพื่อดูเฉพาะรายการนี้', onclick: () => { $('find-state').value = state; runFind(); } },
-      h('div', { class: 'l' }, `${name} วันนี้`),
-      h('div', { class: `v ${bad && rows.length ? 'bad' : ''}` }, `${rows.length} · ${whole(rows.reduce((sum, entry) => sum + Number(entry.amount), 0))}`));
-  };
+  const states = [['', 'ทุกสถานะ'], ...HISTORY_TILES.map((state) => [state, ROW_STATE[state][0]])];
+  // The page opens on today. An emptied day field shows every day.
+  if (S.find.day === undefined) S.find.day = todayField();
   const page = shell([
-    h('div', { class: 'mh' }, h('div', null, h('div', { class: 't' }, 'ประวัติ'), h('div', { class: 's' }, 'ทุกรายการที่โปรแกรมเริ่มจ่าย ใหม่สุดอยู่บน เก็บในเครื่องนี้เท่านั้น'))),
-    h('div', { class: 'kpis' }, tile('ปิดงานแล้ว', 'done'), tile('ค้าง ต้องตรวจ', 'started', true), tile('ชื่อไม่ตรง', 'name', true), tile('จัดการแล้ว', 'resolved')),
+    h('div', { class: 'mh' }, h('div', null, h('div', { class: 't' }, 'ประวัติ'), h('div', { class: 's' }, 'ทุกรายการที่โปรแกรมเริ่มจ่าย ใหม่สุดอยู่บน หน้าละ 20 รายการ'))),
+    h('div', { class: 'kpis six', id: 'history-tiles' }),
     h('div', { class: 'finder' },
-      h('input', { class: 'inp plain', id: 'find-text', value: S.find.text, placeholder: 'ค้นหา เลขบัญชี ชื่อบัญชี ธนาคาร หรือยอด', spellcheck: 'false', oninput: runFind }),
-      h('select', { class: 'inp plain', id: 'find-state', onchange: runFind }, states.map(([value, name]) => h('option', { value, selected: value === S.find.state }, name))),
-      h('input', { class: 'inp plain', id: 'find-day', type: 'date', value: S.find.day, onchange: runFind }),
-      h('button', { class: 'lk', onclick: () => { S.find = { text: '', state: '', day: '' }; S.found = null; render(true); } }, 'ล้าง'),
+      h('input', { class: 'inp plain', id: 'find-text', value: S.find.text, placeholder: 'ค้นหา เลขบัญชี ชื่อบัญชี ธนาคาร หรือยอด', spellcheck: 'false', oninput: () => runFind() }),
+      h('select', { class: 'inp plain', id: 'find-state', onchange: () => runFind() }, states.map(([value, name]) => h('option', { value, selected: value === S.find.state }, name))),
+      h('input', { class: 'inp plain', id: 'find-day', type: 'date', value: S.find.day, onchange: () => runFind() }),
+      h('button', { class: 'lk', onclick: () => { $('find-day').value = todayField(); runFind(); } }, 'วันนี้'),
+      h('button', { class: 'lk', onclick: () => { $('find-day').value = ''; runFind(); } }, 'ทุกวัน'),
+      h('button', { class: 'lk', onclick: () => { S.find = { text: '', state: '', day: todayField(), page: 1 }; render(true); } }, 'ล้าง'),
       h('span', { class: 'sp' }),
       h('span', { class: 'hint', id: 'history-count' })),
     h('div', { class: 'pane grow' },
-      h('div', { class: 'row past head' }, h('span', null, 'เวลา'), h('span', { class: 'a' }, 'ยอด (บาท)'), h('span'), h('span', null, 'ชื่อบัญชี · ธนาคาร · เลขบัญชี · เครื่องที่จ่าย'), h('span', { class: 'st' }, 'สถานะ')),
-      h('div', { class: 'list', id: 'history-list' })),
+      h('div', { class: 'row past head' }, h('span', null, 'เวลา'), h('span', { class: 'a' }, 'ยอด (บาท)'), h('span'), h('span', null, 'ชื่อบัญชี · ธนาคาร · เลขบัญชี · เครื่อง'), h('span', { class: 'do' }, 'สถานะ')),
+      h('div', { class: 'list', id: 'history-list' }),
+      h('div', { class: 'pager', id: 'history-pager' })),
   ]);
-  // The list is filled once the page is in the window: it is found by its id.
-  queueMicrotask(drawHistoryList);
+  // The page is filled once it is in the window: first with the last answer, then with a fresh one.
+  queueMicrotask(() => { drawHistoryList(); runFind(true); });
   return page;
 }
 
