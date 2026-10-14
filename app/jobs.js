@@ -637,6 +637,10 @@ function createJobs(host) {
       checking: host.watched().filter(checking).map((phone) => phone.serial),
       // The banks no phone pays to for now, by code.
       skipBanks: host.skipBanks(),
+      // Each bank's pause as set, and the phones in one now with the time it ends.
+      pauses: host.bankPauses ? host.bankPauses() : {},
+      pauseLead: logic.PAUSE_LEAD_MIN,
+      paused: Object.fromEntries(host.phones().map((phone) => [phone.serial, pausedUntil(phone)]).filter(([, until]) => until)),
       // The banks whose app there are workflows for, by code: the one the main workflows drive first.
       payBanks: [config().bank, ...Object.keys(config().flows)].filter(Boolean),
       // The phones that pay from a bank whose app there are no workflows for.
@@ -1583,10 +1587,19 @@ function createJobs(host) {
     return Boolean(current.bank) && Boolean(code) && code !== current.bank && !current.flows[code];
   }
 
+  /** The time a phone's bank's pause ends ("03:00") while it holds, or ''. A phone with no bank set pays from the first bank. */
+  function pausedUntil(phone) {
+    if (!host.bankPauses) return '';
+    const code = logic.bankCode(host.payBank ? host.payBank(phone.serial) : '') || config().bank;
+    return logic.pauseUntil(host.bankPauses()[code]);
+  }
+
   function shortOf(phone, value, toCode) {
     if (stops()[phone.serial]) return 'stopped';
     if (checking(phone)) return 'checking';
     if (noFlow(config(), phone)) return 'noflow';
+    // In its bank's pause a phone starts nothing; a row it is paying already goes on.
+    if (pausedUntil(phone)) return 'paused';
     // An account the back office does not list cannot be seen to be on, and a row paid from it could not be closed.
     if (unlisted(phone)) return 'missing';
     const over = capOf(phone, value, toCode);

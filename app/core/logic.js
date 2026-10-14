@@ -661,6 +661,39 @@ const OWN_LIMIT_BANKS = ['GSB'];
 // The hour, by this computer's clock, at which a bank starts its daily limits again. Midnight when not named.
 const DAY_TURN_HOUR = { GSB: 23 };
 
+// How many minutes before a bank's pause its phones stop starting rows, so that a row begun just
+// before it is not caught by it half way.
+const PAUSE_LEAD_MIN = 2;
+// The pause a bank is given until the user sets another: Bangkok Bank shuts from 02:30 to 03:00.
+const DEFAULT_PAUSES = { BBL: { from: '02:30', to: '03:00' } };
+const CLOCK_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+/** A pause as kept, cleaned: { from, to } as "HH:MM", or null when it is not one. */
+function cleanPause(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const from = String(raw.from || '').trim();
+  const to = String(raw.to || '').trim();
+  if (!CLOCK_RE.test(from) || !CLOCK_RE.test(to) || from === to) return null;
+  return { from, to };
+}
+
+/**
+ * When a bank's pause, `pause` ({ from, to } as "HH:MM", by this computer's clock), holds at `now`:
+ * from `lead` minutes before its start until its end. A pause may run past midnight. Returns the
+ * time it ends ("03:00") while it holds, or '' when it does not or there is no pause.
+ */
+function pauseUntil(pause, now = new Date(), lead = PAUSE_LEAD_MIN) {
+  const kept = cleanPause(pause);
+  if (!kept) return '';
+  const minutes = (clock) => Number(clock.slice(0, 2)) * 60 + Number(clock.slice(3));
+  const at = new Date(now);
+  const nowMin = at.getHours() * 60 + at.getMinutes() + at.getSeconds() / 60;
+  const start = (minutes(kept.from) - lead + 1440) % 1440;
+  const end = minutes(kept.to);
+  const inside = start <= end ? nowMin >= start && nowMin < end : nowMin >= start || nowMin < end;
+  return inside ? kept.to : '';
+}
+
 /** When the day that a bank's limits count by began, as of `now`: a time in milliseconds. */
 function dayStart(bankCode, now = Date.now()) {
   const at = new Date(now);
@@ -1193,6 +1226,10 @@ module.exports = {
   OWN_LIMIT_BANKS,
   DAY_TURN_HOUR,
   dayStart,
+  PAUSE_LEAD_MIN,
+  DEFAULT_PAUSES,
+  cleanPause,
+  pauseUntil,
   capShort,
   oldestFirst,
   slipDigits,

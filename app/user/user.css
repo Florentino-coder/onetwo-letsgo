@@ -234,3 +234,8 @@ select.inp { appearance: none; }
 .kpis.six button.kpi:hover .l { color: inherit; text-decoration: underline; }
 .pager { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 10px 0 2px; border-top: 1px solid var(--line); flex: none; }
 .pager .btn { padding: 6px 16px; }
+
+/* A bank's pause on the settings page: the bank, two times and its buttons on one line. */
+.pause { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 0; }
+.pause .b { display: inline-flex; align-items: center; gap: 8px; min-width: 150px; }
+.pause .inp { width: auto; }

@@ -716,3 +716,29 @@ test('a PIN typed from one look at the keypad, counted before its last key', () 
   assert.equal(logic.pinMarks(field('••••') + field('•')), null);
   assert.equal(logic.pinMarks('<node text="x" password="false" />'), null);
 });
+
+test('a bank pause, from a little before its start until its end', () => {
+  const at = (h, m, s = 0) => new Date(2026, 9, 15, h, m, s);
+  const bbl = { from: '02:30', to: '03:00' };
+  assert.equal(logic.pauseUntil(bbl, at(2, 27, 59)), '');
+  assert.equal(logic.pauseUntil(bbl, at(2, 28)), '03:00');
+  assert.equal(logic.pauseUntil(bbl, at(2, 45)), '03:00');
+  assert.equal(logic.pauseUntil(bbl, at(2, 59, 59)), '03:00');
+  assert.equal(logic.pauseUntil(bbl, at(3, 0)), '');
+  assert.equal(logic.pauseUntil(bbl, at(14, 0)), '');
+  // Past midnight.
+  const late = { from: '23:50', to: '00:10' };
+  assert.equal(logic.pauseUntil(late, at(23, 47)), '');
+  assert.equal(logic.pauseUntil(late, at(23, 48)), '00:10');
+  assert.equal(logic.pauseUntil(late, at(0, 5)), '00:10');
+  assert.equal(logic.pauseUntil(late, at(0, 10)), '');
+  // A pause starting at midnight begins its lead the evening before.
+  assert.equal(logic.pauseUntil({ from: '00:00', to: '00:30' }, at(23, 59)), '00:30');
+  // No pause, or one that is not two different times.
+  assert.equal(logic.pauseUntil(undefined, at(2, 45)), '');
+  assert.equal(logic.pauseUntil({ from: '02:30', to: '02:30' }, at(2, 30)), '');
+  assert.equal(logic.pauseUntil({ from: '2:30', to: '03:00' }, at(2, 45)), '');
+  assert.deepEqual(logic.cleanPause({ from: ' 02:30 ', to: '03:00' }), { from: '02:30', to: '03:00' });
+  assert.equal(logic.cleanPause({ from: '24:00', to: '03:00' }), null);
+  assert.deepEqual(logic.DEFAULT_PAUSES.BBL, { from: '02:30', to: '03:00' });
+});

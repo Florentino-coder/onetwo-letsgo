@@ -194,6 +194,36 @@ function shownRange() {
   return ranged.length ? [Math.min(...ranged.map((device) => device.amountMin)), Math.max(...ranged.map((device) => device.amountMax))] : null;
 }
 
+/** The banks in their pause now, with the time each ends: [[code, "03:00"]], from the phones that are paused. */
+function pausedNow(jobs) {
+  const ends = {};
+  for (const device of S.state.devices) {
+    const until = (jobs.paused || {})[device.serial];
+    if (until) ends[phoneBank(device)] = until;
+  }
+  return Object.entries(ends);
+}
+
+/**
+ * The pause of each bank whose app the phones use: two times and a save. Its phones start no row
+ * from a little before the first until the second.
+ */
+function pauseFields(jobs) {
+  const banks = jobs.payBanks && jobs.payBanks.length ? jobs.payBanks : ['BBL'];
+  const rows = banks.map((code) => {
+    const kept = (jobs.pauses || {})[code] || { from: '', to: '' };
+    const from = h('input', { class: 'inp plain', id: `pause-from-${code}`, type: 'time', value: kept.from });
+    const to = h('input', { class: 'inp plain', id: `pause-to-${code}`, type: 'time', value: kept.to });
+    const name = ((S.state.banks || []).find((bank) => bank.code === code) || { name: code }).name;
+    return h('div', { class: 'pause' }, h('span', { class: 'b' }, bankMark(code), name),
+      from, h('span', { class: 'hint' }, 'ถึง'), to,
+      h('button', { class: 'lk', onclick: () => act('banks:pause', { code, from: from.value, to: to.value }, `บันทึกช่วงพักของ ${code} แล้ว`) }, 'บันทึก'),
+      kept.from ? h('button', { class: 'lk', onclick: () => act('banks:pause', { code, from: '', to: '' }, `เอาช่วงพักของ ${code} ออกแล้ว`) }, 'ไม่พัก') : null);
+  });
+  return h('div', null, ...rows,
+    h('div', { class: 'hint pad' }, `ก่อนเริ่มช่วงพัก ${jobs.pauseLead || 2} นาที เครื่องของธนาคารนั้นเลิกเริ่มรายการใหม่ รายการที่โอนอยู่ทำต่อจนจบ ระหว่างพัก รายการรอในคิว หรือไปเครื่องธนาคารอื่นที่รับยอดนั้นได้ ใช้เวลาตามนาฬิกาของคอม`));
+}
+
 /**
  * The banks to tick, as the phones' app lists them. `chosen` is the codes ticked now; `changed`
  * is given the new list each time one is ticked or cleared.
@@ -230,6 +260,7 @@ function phoneView(device) {
   else if (unset) word = ['ยังตั้งไม่ครบ', 'warn'];
   else if ((jobs.noFlow || []).includes(device.serial)) word = ['ไม่มีชุดงานของธนาคารนี้', 'bad'];
   else if ((jobs.checking || []).includes(device.serial)) word = ['กำลังตรวจสอบ', 'run'];
+  else if (jobs.paused && jobs.paused[device.serial]) word = [`พัก ถึง ${jobs.paused[device.serial]}`, 'wait'];
   else if (!device.payOn || (listed && listed.on === false)) word = ['ปิดอยู่', 'wait'];
   else if (jobs.accounts.fresh && !listed) word = ['ไม่พบบัญชีในหลังบ้าน', 'bad'];
   else if (balance !== null && balance < device.amountMin) word = ['เงินหมด', 'bad'];
@@ -387,6 +418,7 @@ function home() {
     off: ['บัญชีปิดอยู่', 'wait', 'บัญชีของเครื่องที่รับยอดนี้ปิดอยู่'], stopped: ['เครื่องหยุด', 'bad', 'เครื่องที่รับยอดนี้หยุดอยู่ รอตรวจและรีเซ็ต'],
     noflow: ['ไม่มีชุดงาน', 'bad', 'ชุดงานไม่มีเวิร์กโฟลว์ของแอปธนาคารที่เครื่องนี้ใช้'],
     checking: ['กำลังตรวจสอบ', 'run', 'เครื่องที่รับยอดนี้เพิ่งเสียบสาย กำลังตรวจสอบ'], missing: ['ไม่พบบัญชี', 'bad', 'ไม่พบบัญชีของเครื่องในหลังบ้าน'],
+    paused: ['ธนาคารพัก', 'wait', 'แอปธนาคารของเครื่องที่รับยอดนี้อยู่ในช่วงพัก รายการรอจนพ้นช่วง'],
     skipbank: ['ข้ามธนาคาร', 'warn', 'ธนาคารนี้ถูกตั้งให้ข้ามอยู่'], nobank: ['ไม่รองรับ', 'warn', 'ธนาคารนี้ไม่อยู่ในรายการของแอปธนาคาร'],
   };
   const orderRow = (order) => {
@@ -409,6 +441,7 @@ function home() {
 
   const ownSkips = devices.filter((device) => device.skipBanks.length);
   const tags = h('div', { class: 'tags' },
+    pausedNow(jobs).map(([code, until]) => h('span', { class: 'pill wait', title: 'เครื่องของธนาคารนี้ไม่เริ่มรายการใหม่ในช่วงพัก ตั้งได้ที่หน้าตั้งค่า' }, bankMark(code), `${code} พัก ถึง ${until}`)),
     jobs.skipBanks.length ? h('span', { class: 'pill warn', title: 'รายการไปธนาคารนี้ไม่ถูกจ่าย เอาออกได้ที่หน้าตั้งค่า' }, 'ข้ามธนาคารทุกเครื่อง:', jobs.skipBanks.map((code) => bankMark(code)), jobs.skipBanks.join(', ')) : null,
     ownSkips.map((device) => pill(`${device.label} ข้าม ${device.skipBanks.join(', ')}`, 'warn', 'ตั้งในหน้าต่างของเครื่อง')),
     pill(`เช็กชื่อผู้รับ: ${jobs.config.checkName === false ? 'ปิด' : 'เปิด'}`, jobs.config.checkName === false ? 'wait' : 'run', 'เปิดหรือปิดได้ที่หน้าตั้งค่า'),
@@ -584,6 +617,8 @@ function settings() {
         option('เช็กชื่อผู้รับ', 'ชื่อบนหน้ายืนยันต้องตรงกับรายการ จึงกดยืนยัน', jobs.config.checkName !== false, () => act('jobs:set', { checkName: jobs.config.checkName === false })),
         option('ต้องมีนามสกุล', 'แอปแสดงนามสกุล แต่รายการไม่มี ให้ข้ามรายการ', Boolean(jobs.config.checkFamily), () => act('jobs:set', { checkFamily: !jobs.config.checkFamily }), jobs.config.checkName === false),
         option('ช่วงยอดหน้าเว็บ', 'ให้หลังบ้านส่งเฉพาะยอดในช่วงของเครื่อง', Boolean(jobs.config.filter), () => act('jobs:set', { filter: !jobs.config.filter })),
+        h('div', { class: 'h gap' }, 'ช่วงพักของธนาคาร'),
+        pauseFields(jobs),
         h('div', { class: 'h gap' }, 'ธนาคารที่ข้าม ทุกเครื่อง'),
         bankChips(jobs.skipBanks, (codes) => act('banks:skip', { codes })),
         h('div', { class: 'hint pad' }, jobs.skipBanks.length

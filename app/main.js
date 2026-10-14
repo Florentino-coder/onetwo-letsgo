@@ -278,6 +278,7 @@ const jobs = createJobs({
   },
   // The banks no phone pays to for now, by code, and whether a bank the app does not list is paid to at all.
   skipBanks: () => skipBanks(store.config.skip_banks),
+  bankPauses: () => bankPauses(store.config.bank_pauses),
   knownBanksOnly: USER,
   // The amount range of every phone that has one, online or not, switched on or not.
   ranges: () => Object.keys(store.state.devices).map(amountRange).filter((range) => range.min !== null),
@@ -358,6 +359,13 @@ function deviceMeta(serial) {
 function skipBanks(kept) {
   const known = new Set(logic.BANKS.map((bank) => bank.code));
   return [...new Set((Array.isArray(kept) ? kept : []).map(String))].filter((code) => known.has(code));
+}
+
+/** The banks' pauses as kept, cleaned: { BBL: { from, to } }, for banks the phones' app lists. Never set means the default. */
+function bankPauses(kept) {
+  const raw = kept === undefined ? logic.DEFAULT_PAUSES : kept;
+  const known = new Set(logic.BANKS.map((bank) => bank.code));
+  return Object.fromEntries(Object.entries(raw && typeof raw === 'object' ? raw : {}).filter(([code]) => known.has(code)).map(([code, pause]) => [code, logic.cleanPause(pause)]).filter(([, pause]) => pause));
 }
 
 /** The amounts this phone may pay, as { min, max }; both null when no range is set. */
@@ -1446,7 +1454,7 @@ function publicState() {
 
 // What the user program's window may ask for. Everything else belongs to the studio.
 const USER_CALLS = new Set([
-  'state:get', 'devices:scan', 'adb:restart', 'device:meta', 'device:pin', 'device:pin-show', 'device:range', 'device:pay', 'device:account', 'device:skip', 'banks:skip',
+  'state:get', 'devices:scan', 'adb:restart', 'device:meta', 'device:pin', 'device:pin-show', 'device:range', 'device:pay', 'device:account', 'device:skip', 'banks:skip', 'banks:pause',
   'jobs:set', 'jobs:apitoken', 'jobs:open', 'jobs:orders', 'jobs:pay', 'jobs:payauto', 'jobs:unhalt', 'jobs:resolve',
   'folder:open', 'update:check', 'update:restart',
   'license:set', 'pack:import', 'pack:rollback', 'user:setup', 'user:signed',
@@ -1588,6 +1596,23 @@ function registerIpc() {
     store.config.skip_banks = skipBanks(codes);
     store.saveConfig();
     log(`Banks passed over by every phone: ${store.config.skip_banks.join(', ') || 'none'}.`);
+    send('jobs', jobs.view());
+    return publicState();
+  });
+
+  // A bank's pause: its phones start no row from a little before `from` until `to`. Both empty takes the pause away.
+  handle('banks:pause', ({ code, from, to }) => {
+    if (!logic.BANKS.some((bank) => bank.code === code)) throw new Error('Choose a bank first.');
+    const pauses = bankPauses(store.config.bank_pauses);
+    if (!from && !to) delete pauses[code];
+    else {
+      const pause = logic.cleanPause({ from, to });
+      if (!pause) throw new Error('Set the pause as two different times, such as 02:30 and 03:00.');
+      pauses[code] = pause;
+    }
+    store.config.bank_pauses = pauses;
+    store.saveConfig();
+    log(`Bank pauses: ${Object.entries(pauses).map(([each, pause]) => `${each} ${pause.from}-${pause.to}`).join(', ') || 'none'}.`);
     send('jobs', jobs.view());
     return publicState();
   });

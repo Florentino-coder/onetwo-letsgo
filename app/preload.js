@@ -14,7 +14,7 @@ const CALLS = [
   'folder:open', 'update:check', 'update:restart',
   'handout:view', 'handout:issue', 'handout:cancel', 'handout:pack', 'handout:release',
   'license:set', 'pack:import', 'pack:rollback', 'user:setup', 'user:signed',
-  'slip:view', 'history:search', 'report:save', 'telegram:set', 'telegram:test', 'user:prefs', 'device:skip', 'banks:skip',
+  'slip:view', 'history:search', 'report:save', 'telegram:set', 'telegram:test', 'user:prefs', 'device:skip', 'banks:skip', 'banks:pause',
 ];
 const EVENTS = ['log', 'devices', 'thumb', 'job', 'status', 'update', 'timeline', 'touch', 'jobs', 'state', 'alert'];
 
