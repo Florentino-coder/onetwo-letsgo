@@ -1825,6 +1825,8 @@ function createJobs(host) {
       audit('start', key, { ...order, serial, phone: phone.label, workflow: flow.workflow });
       stage('running');
       const since = await host.phoneClock(serial);
+      // What a "checktext?" step saw before this run is not this run's.
+      if (host.screenSaw) host.screenSaw(serial);
       // The fourth value is the name of the account's holder, for a workflow that checks it; a job without one sends a dash.
       await runOnPhone(flow, flowText, serial, [order.account, typedAmount(order.amount), order.bank, order.holder || '-'], key);
       audit('workflow', key, { serial });
@@ -1838,12 +1840,16 @@ function createJobs(host) {
       const wrong = [];
       if (!slip.amount || Number(slip.amount) !== Number(order.amount)) wrong.push(`the amount (slip ${slip.amount || 'unread'}, row ${order.amount})`);
       // An account whose hidden digits the reader misread, or where it added a digit, is known by its ends only.
-      if (!logic.screenShows(logic.slipDigits(read.text), order.account) && !logic.endsAgree(slip.receiver_account_masked, order.account)) wrong.push('the account paid to');
+      const accountOnSlip = logic.screenShows(logic.slipDigits(read.text), order.account) || logic.endsAgree(slip.receiver_account_masked, order.account);
+      // A workflow may look for the account on the bank app's own success page ("checktext? {1}"), read
+      // from its words, not a picture: when that page showed it, a misread slip is noted, not a stop.
+      const shownOnPage = host.screenSaw ? host.screenSaw(serial).has(String(order.account)) : false;
+      if (!accountOnSlip && !shownOnPage) wrong.push('the account paid to');
       // The slip must come from this phone's own account: another account means another phone or app paid.
       if (phone.account && !logic.maskAgrees(slip.sender_account_masked, phone.account)) wrong.push(`the paying account (slip ${slip.sender_account_masked || 'unread'})`);
       if (phone.bank && logic.bankCode(phone.bank) && slip.bank && logic.bankCode(phone.bank) !== slip.bank) wrong.push(`the paying bank (slip ${slip.bank})`);
       wrong.push(...logic.verifyScreen(read.text, [], flow.expect));
-      audit('slip', key, { serial, file: read.file, slip, agrees: !wrong.length, wrong });
+      audit('slip', key, { serial, file: read.file, slip, agrees: !wrong.length, wrong, ...(shownOnPage ? { page: accountOnSlip ? 'shown' : 'shown, slip misread' } : {}) });
       if (wrong.length) throw new Error(`The slip does not agree on ${wrong.join(', ')}. Picture: ${read.file}`);
       mark(order, 'paid', { slip: read.file });
       host.spend(serial, order.amount);

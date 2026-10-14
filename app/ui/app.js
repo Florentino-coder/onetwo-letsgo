@@ -302,7 +302,7 @@ const WF_STEPS = [
   ['wake', 'ปลุกจอ'], ['home', 'หน้าแรก'], ['back', 'ย้อนกลับ'], ['recent', 'แอปล่าสุด'], ['sleep', 'ปิดจอ'],
   ['wait', 'รอ'], ['open', 'เปิดแอป'], ['close', 'ปิดแอป'], ['text', 'พิมพ์ข้อความ'], ['run', 'รันเวิร์กโฟลว์ย่อย'], ['pick', 'แตะตามชุดตำแหน่ง'], ['pin', 'กดรหัส PIN'], ['keyevent', 'กดปุ่ม'], ['screenshot', 'จับภาพหน้าจอ'],
   ['tap', 'แตะที่ X, Y'], ['swipe', 'ปัดจาก X, Y'], ['taptext', 'แตะที่ข้อความ'], ['taptext?', 'แตะข้อความ ถ้ามีบนจอ'], ['scrolltap', 'เลื่อนหาข้อความ แล้วแตะ'],
-  ['waittext', 'รอจนข้อความขึ้น'], ['checktext', 'ต้องเจอข้อความหรือเลขบัญชี'], ['checkamount', 'ต้องเจอยอดเงิน'], ['checkname', 'ชื่อผู้รับต้องตรง'], ['stoptext', 'ถ้าเจอข้อความ ให้หยุด'],
+  ['waittext', 'รอจนข้อความขึ้น'], ['checktext', 'ต้องเจอข้อความหรือเลขบัญชี'], ['checktext?', 'ดูว่ามีข้อความหรือเลขบัญชี (ไม่หยุด)'], ['checkamount', 'ต้องเจอยอดเงิน'], ['checkname', 'ชื่อผู้รับต้องตรง'], ['stoptext', 'ถ้าเจอข้อความ ให้หยุด'],
   ['slidetext', 'ลากปุ่มเลื่อนที่มีข้อความ'], ['tapid', 'แตะช่องตามชื่อในแอป'], ['pintext', 'กดรหัส PIN ตามตัวเลขบนแป้น'],
 ];
 const WF_LABELS = { ...Object.fromEntries(WF_STEPS), tap: 'แตะ', swipe: 'ปัด', '#': 'หมายเหตุ' };
@@ -324,7 +324,7 @@ const inputLabel = (number) => `ข้อมูลช่อง ${number}`;
 function workflowInputCount(text) {
   let count = 0;
   for (const step of workflowSteps(text)) {
-    if (!['text', 'run', 'pick', 'taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checkamount', 'checkname', 'stoptext', 'slidetext', 'tapid'].includes(step.command)) continue;
+    if (!['text', 'run', 'pick', 'taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checktext?', 'checkamount', 'checkname', 'stoptext', 'slidetext', 'tapid'].includes(step.command)) continue;
     for (const match of step.argument.matchAll(/\{(\d{1,2})\}/g)) count = Math.max(count, Number(match[1]));
   }
   return count;
@@ -409,7 +409,7 @@ function workflowBuilder(wf) {
     if (step.command === 'text') return input(step.argument, setArgument(step), { placeholder: 'ข้อความที่จะพิมพ์' });
     // The words as the phone's screen shows them. The step waits for them, then taps them wherever they are.
     if (['waittext', 'scrolltap', 'stoptext'].includes(step.command)) return input(step.argument, setArgument(step), { placeholder: 'ข้อความบนจอทั้งคำ เช่น รายการสำเร็จ หรือ {3}' });
-    if (step.command === 'checktext') return input(step.argument, setArgument(step), { placeholder: 'เลขบัญชี {1} หรือข้อความที่ต้องเจอบนจอ' });
+    if (step.command === 'checktext' || step.command === 'checktext?') return input(step.argument, setArgument(step), { placeholder: 'เลขบัญชี {1} หรือข้อความที่ต้องเจอบนจอ' });
     if (step.command === 'checkamount') return input(step.argument, setArgument(step), { placeholder: 'ยอดเงิน เช่น {2} หรือ {2} จำนวนเงิน เพื่ออ่านเฉพาะใต้ป้ายนั้น' });
     if (step.command === 'slidetext') return input(step.argument, setArgument(step), { placeholder: 'ข้อความบนปุ่มเลื่อน เช่น เลื่อนเพื่อส่ง' });
     if (step.command === 'tapid') return input(step.argument, setArgument(step), { placeholder: 'ชื่อช่องในแอป เช่น amountEditText' });
@@ -732,6 +732,7 @@ function stepText({ command, argument }) {
   if (command === 'scrolltap') return `เลื่อนหา "${argument}" แล้วแตะ`;
   if (command === 'waittext') return `รอจน "${argument}" ขึ้นบนจอ`;
   if (command === 'checktext') return `ต้องเจอ "${argument}" บนจอ ไม่เจอให้หยุด`;
+  if (command === 'checktext?') return `ดูว่ามี "${argument}" บนจอ ไม่เจอก็ทำต่อ`;
   if (command === 'checkamount') return `ต้องเจอยอด ${argument} บนจอ ไม่เจอให้หยุด`;
   if (command === 'checkname') return `ชื่อผู้รับบนจอต้องตรงกับ ${argument} ไม่ตรงให้หยุด`;
   if (command === 'stoptext') return `ถ้าเจอ "${argument}" ให้หยุด`;

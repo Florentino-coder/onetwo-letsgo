@@ -684,3 +684,9 @@ test('a day that begins at an hour of its own, and two daily caps', () => {
   assert.equal(logic.capShort({ bankCode: 'BBL', cap: 140000, capOwn: 5 }, spent, 501, 'BBL'), 'cap');
   assert.equal(logic.capShort({ bankCode: 'BBL', cap: null, capOwn: null }, spent, 1e9, 'KBANK'), '');
 });
+
+test('a look at the screen that never stops the run', () => {
+  const steps = logic.expandWorkflow(logic.parseWorkflow('waittext ทำรายการสำเร็จ\nchecktext? {1}'), ['3087270280', '1112.00'], {}, {}, '');
+  assert.deepEqual(steps.map((step) => [step.command, step.argument]), [['waittext', 'ทำรายการสำเร็จ'], ['checktext?', '3087270280']]);
+  assert.throws(() => logic.parseWorkflow('checktext?'), /checktext\?/);
+});

@@ -9,9 +9,9 @@ const KEY_ALIASES = {
   wake: 'KEYCODE_WAKEUP',
   sleep: 'KEYCODE_SLEEP',
 };
-const WORKFLOW_COMMANDS = new Set(['wait', 'keyevent', 'open', 'text', 'screenshot', 'tap', 'swipe', 'run', 'pick', 'pin', 'close', 'taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checkamount', 'checkname', 'stoptext', 'slidetext', 'tapid', 'pintext', ...Object.keys(KEY_ALIASES)]);
+const WORKFLOW_COMMANDS = new Set(['wait', 'keyevent', 'open', 'text', 'screenshot', 'tap', 'swipe', 'run', 'pick', 'pin', 'close', 'taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checkamount', 'checkname', 'stoptext', 'slidetext', 'tapid', 'pintext', 'checktext?', ...Object.keys(KEY_ALIASES)]);
 // Steps that read the phone's screen for words or values.
-const SCREEN_COMMANDS = ['taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checkamount', 'checkname', 'stoptext', 'slidetext', 'tapid'];
+const SCREEN_COMMANDS = ['taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checktext?', 'checkamount', 'checkname', 'stoptext', 'slidetext', 'tapid'];
 // Steps whose argument may hold {1}, {2}… of a job.
 const FILLED_COMMANDS = ['text', 'run', 'pick', ...SCREEN_COMMANDS];
 const DEFAULT_SWIPE_MS = 300;

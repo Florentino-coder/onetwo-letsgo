@@ -48,10 +48,14 @@ const SCROLLTAP_PAGES = 6;
 // A read of a phone's screen is slow (seconds). Steps that only look share one read; any step
 // that touches the phone, or waits, throws it away.
 const SCREEN_FRESH_MS = 8000;
-const SCREEN_STEPS = new Set(['taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checkamount', 'checkname', 'stoptext', 'slidetext', 'tapid']);
+const SCREEN_STEPS = new Set(['taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checktext?', 'checkamount', 'checkname', 'stoptext', 'slidetext', 'tapid']);
 // How long the drag of a "slide to confirm" bar takes.
 const SLIDE_MS = 700;
 const screens = new Map();
+// What a "checktext?" step saw on each phone's screen since the program last asked: serial -> Set of values.
+const seenOnScreen = new Map();
+// How long a "checktext?" step looks before it goes on without the value.
+const SOFT_CHECK_MS = 3000;
 
 async function screenOf(serial, again) {
   const kept = screens.get(serial);
@@ -241,6 +245,12 @@ const jobs = createJobs({
   inputsOf: (text) => logic.workflowInputs(logic.parseWorkflow(text)),
   readScreen: (serial) => readScreen(serial),
   readSlip: (serial, since) => readSlip(serial, since),
+  // The values a "checktext?" step saw on this phone since the last time this was asked; asking forgets them.
+  screenSaw: (serial) => {
+    const seen = seenOnScreen.get(serial) || new Set();
+    seenOnScreen.delete(serial);
+    return seen;
+  },
   phoneClock: (serial) => requireAdb().clock(serial),
   phones: () => [...devices.values()].filter((device) => device.status === 'device' && deviceMeta(device.serial).pay_on !== false).map((device) => ({ serial: device.serial, label: deviceLabel(device), since: device.onlineSince || 0, skip: skipBanks(deviceMeta(device.serial).skip_banks), ...amountRange(device.serial), ...payAccount(device.serial) })),
   // Every online phone that has an account, switched on or not, with when it came online.
@@ -839,6 +849,23 @@ async function runWorkflowStep(device, step, workflowName) {
       }
       // The value is the job's, not the screen's: saying it tells nothing the job did not.
       throw new Error(step.command === 'checkamount' ? `The phone's screen does not show the amount ${step.argument}. Nothing was confirmed.` : `The phone's screen does not show "${String(step.argument).replace(/\d(?=\d{4})/g, 'x')}". Nothing was confirmed.`);
+    }
+    case 'checktext?': {
+      // A look that never stops the run: it notes whether the value is on the screen, such as the
+      // account on a bank app's own success page, for the slip check to lean on when a picture is misread.
+      const until = Date.now() + SOFT_CHECK_MS * payAccount(serial).scale;
+      for (let look = 0; ; look += 1) {
+        try {
+          const xml = await screenOf(serial, look > 0);
+          if (/^[\d\s-]{6,}$/.test(step.argument) ? screen.showsAccount(xml, step.argument) : logic.findUiText(xml, step.argument)) {
+            if (!seenOnScreen.has(serial)) seenOnScreen.set(serial, new Set());
+            seenOnScreen.get(serial).add(String(step.argument));
+            return 'shown';
+          }
+        } catch { /* a screen that cannot be read is looked at again */ }
+        if (Date.now() >= until) return 'not on the screen';
+        await sleep(TAPTEXT_RETRY_MS);
+      }
     }
     case 'slidetext':
     case 'tapid': {
