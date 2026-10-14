@@ -1718,7 +1718,8 @@ function createJobs(host) {
     return {
       at: orders.at,
       note: orders.note,
-      list: orders.list.map((order) => {
+      // Shown in the order they are paid: the oldest asked for at the top.
+      list: logic.oldestFirst(orders.list).map((order) => {
         const phone = phoneFor(order);
         const entry = ledger[order.key];
         // Say why no phone takes a row whose amount is in a phone's range.
@@ -1888,7 +1889,8 @@ function createJobs(host) {
       if (host.busy()) return;
       let began = 0;
       if (payAuto && !halted() && orders.note === 'ok') {
-        for (const order of orders.list) {
+        // The row asked for first is paid first. A row no phone can take now does not hold up the next.
+        for (const order of logic.oldestFirst(orders.list)) {
           if (ledger[order.key] || [...paying.values()].some((each) => each.key === order.key)) continue;
           if (!phoneFor(order, true)) continue;
           // Not waited for: the phones pay side by side. A fault stops its own phone.

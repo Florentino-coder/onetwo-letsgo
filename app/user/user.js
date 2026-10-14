@@ -427,7 +427,7 @@ function home() {
         h('div', { class: 'h' }, 'เครื่อง', h('b', null, `${phones.filter((view) => view.ready).length} จาก ${phones.length} พร้อม`)),
         h('div', { class: 'list' }, phones.length ? phones.map(phoneRow) : h('div', { class: 'empty' }, S.state.tools.adb ? 'ยังไม่พบเครื่อง เสียบสาย USB และเปิดการแก้ไขข้อบกพร่อง USB ที่มือถือ' : 'ไม่พบตัวเชื่อมต่อมือถือ (ADB) ในคอมเครื่องนี้ ติดตั้งโปรแกรมใหม่ หรือแจ้งผู้พัฒนา'))),
       h('div', { class: 'pane' },
-        h('div', { class: 'h' }, 'คิว', h('b', null, 'เรียงตามที่หลังบ้านแสดง')),
+        h('div', { class: 'h' }, 'คิว', h('b', null, 'เรียงตามเวลาขอถอน เก่าสุดก่อน')),
         orders.length ? h('div', { class: 'row order head' }, h('span', { class: 'a' }, 'ยอด (บาท)'), h('span'), h('span', null, 'ชื่อบัญชี · ธนาคาร · เลขบัญชี'), h('span', { class: 'st' }, 'สถานะ')) : null,
         h('div', { class: 'list' }, orders.length ? orders.map(orderRow) : h('div', { class: 'empty' }, emptyQueue)))),
   ]);

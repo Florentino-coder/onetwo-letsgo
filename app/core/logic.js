@@ -644,6 +644,24 @@ function parseWithdrawRow(cells) {
 }
 
 // A time from the back office's own request, as its page shows it: Thai time, day first.
+/** When a row's "DD/MM/YYYY HH:MM:SS" is, as a number that grows with time; 0 when it is not such a time. */
+function rowTime(text) {
+  const [, day, month, year, hour, minute, second] = String(text || '').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/) || [];
+  return year ? Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second || 0)) : 0;
+}
+
+/**
+ * Withdrawal rows in the order they are to be paid: the one asked for first comes first, and of
+ * two asked for at the same second, the one approved first. A row with no time keeps its place
+ * after those that have one. The list given is not changed.
+ */
+function oldestFirst(rows) {
+  const late = Number.MAX_SAFE_INTEGER;
+  return rows.map((row, index) => ({ row, index, asked: rowTime(row.requested) || late, approved: rowTime(row.approved) || late }))
+    .sort((a, b) => a.asked - b.asked || a.approved - b.approved || a.index - b.index)
+    .map((each) => each.row);
+}
+
 function thaiTime(iso) {
   const at = Date.parse(String(iso || ''));
   if (!Number.isFinite(at)) return '';
@@ -1096,6 +1114,7 @@ module.exports = {
   screenShows,
   verifyScreen,
   parseSlip,
+  oldestFirst,
   slipDigits,
   endsAgree,
   bankCode,

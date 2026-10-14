@@ -625,3 +625,19 @@ test('a slip whose account begins with a 0 read as the letter O', () => {
   // An O in a word is left alone.
   assert.equal(logic.slipDigits('QR Code Oxxford TOxxx12'), 'QR Code Oxxford TOxxx12');
 });
+
+test('rows are paid oldest first', () => {
+  const rows = [
+    { key: 'c', requested: '14/10/2026 06:36:30', approved: '14/10/2026 06:37:00' },
+    { key: 'none', requested: '', approved: '' },
+    { key: 'b', requested: '14/10/2026 06:36:22', approved: '14/10/2026 06:38:00' },
+    { key: 'a2', requested: '13/10/2026 23:59:59', approved: '14/10/2026 06:40:00' },
+    { key: 'a1', requested: '13/10/2026 23:59:59', approved: '14/10/2026 06:39:00' },
+    { key: 'd', requested: '14/10/2026 6:40', approved: '' },
+  ];
+  assert.deepEqual(logic.oldestFirst(rows).map((row) => row.key), ['a1', 'a2', 'b', 'c', 'd', 'none']);
+  // The list given is left as it was.
+  assert.equal(rows[0].key, 'c');
+  // A new month and a new year come after the old ones, which they would not as text.
+  assert.deepEqual(logic.oldestFirst([{ key: 'new', requested: '01/01/2027 00:00:01' }, { key: 'old', requested: '31/12/2026 23:59:59' }]).map((row) => row.key), ['old', 'new']);
+});
