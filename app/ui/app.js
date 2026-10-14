@@ -738,7 +738,7 @@ function stepText({ command, argument }) {
   if (command === 'stoptext') return `ถ้าเจอ "${argument}" ให้หยุด`;
   if (command === 'slidetext') return `ลากปุ่มเลื่อน "${argument}" จากซ้ายไปขวา`;
   if (command === 'tapid') return `แตะช่อง ${argument}`;
-  if (command === 'pintext') return 'กดรหัส PIN ของเครื่อง ตามตัวเลขบนแป้น';
+  if (command === 'pintext') return /once/.test(argument) ? 'กดรหัส PIN ของเครื่อง อ่านแป้นครั้งเดียว นับก่อนกดหลักสุดท้าย' : 'กดรหัส PIN ของเครื่อง ตามตัวเลขบนแป้น';
   if (command === 'taptext') return `แตะที่ข้อความ "${argument}"`;
   if (command === 'taptext?') return `แตะที่ข้อความ "${argument}" ถ้ามีบนจอ`;
   if (command === 'open') return `เปิดแอป ${argument}`;

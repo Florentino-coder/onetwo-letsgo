@@ -690,3 +690,29 @@ test('a look at the screen that never stops the run', () => {
   assert.deepEqual(steps.map((step) => [step.command, step.argument]), [['waittext', 'ทำรายการสำเร็จ'], ['checktext?', '3087270280']]);
   assert.throws(() => logic.parseWorkflow('checktext?'), /checktext\?/);
 });
+
+test('a PIN typed from one look at the keypad, counted before its last key', () => {
+  const steps = logic.expandWorkflow(logic.parseWorkflow('pintext 400 once'), [], {}, {}, '123456');
+  assert.deepEqual(steps.map((step) => step.command), ['pinkeys', 'pinkey', 'wait', 'pinkey', 'wait', 'pinkey', 'wait', 'pinkey', 'wait', 'pinkey', 'wait', 'pincount', 'pinkey']);
+  assert.equal(steps.filter((step) => step.command === 'pinkey').every((step) => step.secret), true);
+  assert.equal(steps.find((step) => step.command === 'pincount').argument, '5');
+  assert.equal(steps.filter((step) => step.command === 'wait').every((step) => step.argument === '400'), true);
+  assert.throws(() => logic.parseWorkflow('pintext once'), /pintext/);
+  assert.throws(() => logic.parseWorkflow('pintext 400 twice'), /pintext/);
+  // The old form is unchanged.
+  assert.equal(logic.expandWorkflow(logic.parseWorkflow('pintext 300'), [], {}, {}, '123456').filter((step) => step.command === 'taptext').length, 6);
+
+  const key = (digit, x, y) => `<node text="${digit}" resource-id="app:id/t9_key_${digit}" bounds="[${x},${y}][${x + 200},${y + 90}]" />`;
+  const pad = [key(1, 15, 1077), key(2, 247, 1077), key(3, 479, 1077), key(4, 15, 1183), key(5, 247, 1183), key(6, 479, 1183), key(7, 15, 1289), key(8, 247, 1289), key(9, 479, 1289), key(0, 250, 1395)].join('');
+  const keys = logic.findKeypad(pad);
+  assert.deepEqual(keys['5'], { x: 347, y: 1228 });
+  assert.equal(Object.keys(keys).length, 10);
+  assert.equal(logic.findKeypad(pad.replace(key(0, 250, 1395), '')), null);
+  assert.equal(logic.findKeypad(pad + key(3, 10, 10)), null);
+
+  const field = (text) => `<node text="${text}" resource-id="app:id/pinTextView" password="true" bounds="[222,813][496,843]" /><node text="ลืมรหัสผ่าน" password="false" bounds="[0,900][720,940]" />`;
+  assert.equal(logic.pinMarks(field('•••••')), 5);
+  assert.equal(logic.pinMarks(field('')), 0);
+  assert.equal(logic.pinMarks(field('••••') + field('•')), null);
+  assert.equal(logic.pinMarks('<node text="x" password="false" />'), null);
+});

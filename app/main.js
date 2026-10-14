@@ -45,6 +45,8 @@ const WAITTEXT_MS = 40000;
 // How a "scrolltap" step pages down a list, and how many pages it tries.
 const SCROLLTAP_SWIPE = '50% 70% 50% 35%';
 const SCROLLTAP_PAGES = 6;
+// Back up a list: the finger moves down the screen, fast.
+const SCROLLTAP_SWIPE_UP = '50% 30% 50% 85%';
 // A read of a phone's screen is slow (seconds). Steps that only look share one read; any step
 // that touches the phone, or waits, throws it away.
 const SCREEN_FRESH_MS = 8000;
@@ -56,6 +58,10 @@ const screens = new Map();
 const seenOnScreen = new Map();
 // How long a "checktext?" step looks before it goes on without the value.
 const SOFT_CHECK_MS = 3000;
+// The keys of each phone's PIN pad, from the one look a "pintext … once" takes: serial -> { digit: { x, y } }.
+const keypads = new Map();
+// How many times in a row "scrolltap" may fail to read the screen before it gives up; a failed read is not a page.
+const SCROLLTAP_FAULTS = 4;
 
 async function screenOf(serial, again) {
   const kept = screens.get(serial);
@@ -781,15 +787,114 @@ async function runWorkflowStep(device, step, workflowName) {
       await guard(serial, workflowName, { allowManualOnly: true, requireCapture: true });
       await captureToFile(serial);
       return;
-    case 'taptext':
-    case 'taptext?':
     case 'scrolltap': {
+      await guard(serial, workflowName);
+      // Page down the list between looks. A look that could not read the screen is taken again
+      // without paging, so the list is never paged past what was not seen. At the end of the list
+      // it goes back to the top once and looks again, for a list that was not at its top.
+      const size = await requireAdb().screenSize(serial);
+      const down = logic.gesturePixels(logic.parseGesture('swipe', SCROLLTAP_SWIPE).points, size);
+      const up = logic.gesturePixels(logic.parseGesture('swipe', SCROLLTAP_SWIPE_UP).points, size);
+      let fault = null;
+      let xml = '';
+      let faults = 0;
+      for (let round = 0; round < 2; round += 1) {
+        if (round) {
+          for (let i = 0; i < SCROLLTAP_PAGES + 2; i += 1) await requireAdb().swipe(serial, ...up, 250);
+          screens.delete(serial);
+          await sleep(TAPTEXT_RETRY_MS);
+        }
+        for (let page = 0; page <= SCROLLTAP_PAGES;) {
+          try {
+            xml = await screenOf(serial, round > 0 || page > 0 || faults > 0);
+            fault = null;
+            faults = 0;
+          } catch (error) {
+            fault = error;
+            faults += 1;
+            if (faults > SCROLLTAP_FAULTS) throw new Error(`The screen could not be read: ${error.message}`);
+            await sleep(TAPTEXT_RETRY_MS);
+            continue;
+          }
+          const spot = logic.findUiText(xml, step.argument);
+          if (spot) {
+            await requireAdb().tap(serial, spot.x, spot.y);
+            screens.delete(serial);
+            return `${spot.x} ${spot.y} px${round ? ' (after going back to the top)' : ''}`;
+          }
+          page += 1;
+          if (page > SCROLLTAP_PAGES) break;
+          await requireAdb().swipe(serial, ...down, 600);
+          screens.delete(serial);
+          await sleep(TAPTEXT_RETRY_MS);
+        }
+      }
+      throw new Error(fault ? `The screen could not be read: ${fault.message}` : `"${step.argument}" is not on the screen. The screen says: ${screen.gist(xml) || 'nothing'}`);
+    }
+    case 'pinkeys': {
+      // One look at the PIN pad. Without every digit on one key each, the keys are looked for one by one instead.
+      // The app in front is checked here once for all the keys, not before each one.
+      keypads.delete(serial);
+      await guard(serial, workflowName);
+      const until = Date.now() + TAPTEXT_WAIT_MS * payAccount(serial).scale;
+      for (let look = 0; ; look += 1) {
+        try {
+          const keys = logic.findKeypad(await screenOf(serial, true));
+          if (keys) {
+            keypads.set(serial, keys);
+            return 'the keypad was read';
+          }
+        } catch { /* looked at again */ }
+        if (Date.now() >= until) return 'each key is looked for';
+        await sleep(TAPTEXT_RETRY_MS);
+      }
+    }
+    case 'pinkey': {
+      const kept = (keypads.get(serial) || {})[step.argument];
+      if (!kept) await guard(serial, workflowName);
+      if (kept) {
+        await requireAdb().tap(serial, kept.x, kept.y);
+        screens.delete(serial);
+        return '';
+      }
+      // No look at the whole pad: this key is found the way "taptext" finds words.
+      const until = Date.now() + TAPTEXT_WAIT_MS * payAccount(serial).scale;
+      for (let look = 0; ; look += 1) {
+        try {
+          const spot = logic.findUiText(await screenOf(serial, true), step.argument);
+          if (spot) {
+            await requireAdb().tap(serial, spot.x, spot.y);
+            screens.delete(serial);
+            return '';
+          }
+        } catch { /* looked at again */ }
+        if (Date.now() >= until) throw new Error('A key of the PIN is not on the screen.');
+        await sleep(TAPTEXT_RETRY_MS);
+      }
+    }
+    case 'pincount': {
+      // Before the key that completes the PIN: the field must show one mark for each key pressed.
+      const wanted = Number(step.argument);
+      let shown = null;
+      const until = Date.now() + 3000 * payAccount(serial).scale;
+      for (let look = 0; ; look += 1) {
+        try {
+          shown = logic.pinMarks(await screenOf(serial, true));
+          if (shown === wanted) return `${shown} of the PIN's keys are in`;
+        } catch { /* looked at again */ }
+        if (Date.now() >= until) break;
+        await sleep(TAPTEXT_RETRY_MS);
+      }
+      keypads.delete(serial);
+      throw new Error(`The PIN field shows ${shown === null ? 'no count' : `${shown} mark(s)`} where ${wanted} keys were pressed, so the last key was not pressed and no PIN was sent.`);
+    }
+    case 'taptext':
+    case 'taptext?': {
       await guard(serial, workflowName);
       // The words may not be on the screen yet: the screen is read again until they are. An
       // optional step ("taptext?") looks once and goes on without them, such as for a notice
-      // that only some phones show. "scrolltap" pages down a list between looks.
+      // that only some phones show.
       const optional = step.command === 'taptext?';
-      const scrolls = step.command === 'scrolltap';
       const until = Date.now() + (optional ? 0 : TAPTEXT_WAIT_MS * payAccount(serial).scale);
       let fault = null;
       let xml = '';
@@ -806,12 +911,7 @@ async function runWorkflowStep(device, step, workflowName) {
         } catch (error) {
           fault = error;
         }
-        if (scrolls ? look >= SCROLLTAP_PAGES : Date.now() >= until) break;
-        if (scrolls) {
-          const size = await requireAdb().screenSize(serial);
-          await requireAdb().swipe(serial, ...logic.gesturePixels(logic.parseGesture('swipe', SCROLLTAP_SWIPE).points, size), 600);
-          screens.delete(serial);
-        }
+        if (Date.now() >= until) break;
         await sleep(TAPTEXT_RETRY_MS);
       }
       if (optional) return 'not on the screen';
@@ -989,7 +1089,7 @@ async function runWorkflowSteps(device, steps, run, workflowName) {
       send('timeline', { ...entry, status: 'ok', at: started, ms: Date.now() - started, detail: step.secret ? '' : detail || '' });
     } catch (error) {
       // A key of the PIN looked for by its digit must not be named by the fault either.
-      const message = step.secret && step.command === 'taptext' ? 'A key of the PIN is not on the screen.' : error.message;
+      const message = step.secret && ['taptext', 'pinkey', 'pinkeys'].includes(step.command) ? 'A key of the PIN is not on the screen.' : error.message;
       send('timeline', { ...entry, status: 'error', at: started, ms: Date.now() - started, detail: message });
       throw new Error(`step ${index + 1} (${step.command}): ${message}`);
     }

@@ -304,7 +304,7 @@ function parseWorkflow(text) {
     } else if (command === 'run') {
       if (!argument) throw new Error(`Line ${lineNo}: run expects the name of a saved workflow, for example 'run bank-{3}'.`);
     } else if (command === 'pintext') {
-      if (!/^\d{0,5}$/.test(argument)) throw new Error(`Line ${lineNo}: pintext takes nothing, or the wait between keys in milliseconds, for example 'pintext 300'.`);
+      if (!/^(\d{1,5}(\s+once)?)?$/.test(argument)) throw new Error(`Line ${lineNo}: pintext takes nothing, or the wait between keys in milliseconds, for example 'pintext 300', and "once" to read the keypad only once: 'pintext 400 once'.`);
     } else if (command === 'pin') {
       if (!parsePin(argument)) throw new Error(`Line ${lineNo}: pin expects the keypad's position set, for example 'pin keypad'.`);
     } else if (command === 'pick') {
@@ -1022,13 +1022,50 @@ function pinSteps(step, sets, pin) {
  */
 function pinTextSteps(step, pin) {
   if (!isPin(pin)) throw new Error('No PIN is set for this phone.');
-  const gap = step.argument ? Number(step.argument) : DEFAULT_PIN_GAP_MS;
+  const [wait, once] = String(step.argument || '').split(/\s+/);
+  const gap = wait ? Number(wait) : DEFAULT_PIN_GAP_MS;
+  // "once": the keypad is read once and its keys tapped from that look; before the last key the
+  // PIN field must show exactly one mark for each key already pressed, or the last key is not
+  // pressed, so an app that takes the PIN as soon as it is whole is never sent a wrong one.
+  if (once === 'once') {
+    const steps = [{ ...step, command: 'pinkeys', argument: '', note: 'PIN', secret: true }];
+    [...pin].forEach((digit, index) => {
+      if (index) steps.push({ ...step, command: 'wait', argument: String(gap), note: '' });
+      if (index && index === pin.length - 1) steps.push({ ...step, command: 'pincount', argument: String(index), note: 'PIN' });
+      steps.push({ ...step, command: 'pinkey', argument: digit, note: 'PIN', secret: true });
+    });
+    return steps;
+  }
   const steps = [];
   for (const digit of pin) {
     if (steps.length) steps.push({ ...step, command: 'wait', argument: String(gap), note: '' });
     steps.push({ ...step, command: 'taptext', argument: digit, note: 'PIN', secret: true });
   }
   return steps;
+}
+
+/**
+ * The keys of a number pad on a phone's screen, from its view tree: { '0': { x, y }, … '9': … }, or
+ * null unless each digit is on exactly one key.
+ */
+function findKeypad(xml) {
+  const keys = {};
+  for (const [node] of String(xml).matchAll(/<node\s[^>]*>/g)) {
+    const digit = (node.match(/\stext="(\d)"/) || [])[1];
+    if (digit === undefined) continue;
+    const bounds = (node.match(/\sbounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"/) || []).slice(1).map(Number);
+    if (bounds.length !== 4 || bounds[2] <= bounds[0] || bounds[3] <= bounds[1]) continue;
+    if (keys[digit]) return null;
+    keys[digit] = { x: Math.round((bounds[0] + bounds[2]) / 2), y: Math.round((bounds[1] + bounds[3]) / 2) };
+  }
+  return Object.keys(keys).length === 10 ? keys : null;
+}
+
+/** How many marks the one password field on a phone's screen shows, or null when there is not exactly one. */
+function pinMarks(xml) {
+  const fields = [...String(xml).matchAll(/<node\s[^>]*>/g)].map(([node]) => node).filter((node) => /\spassword="true"/.test(node));
+  if (fields.length !== 1) return null;
+  return [...((fields[0].match(/\stext="([^"]*)"/) || [])[1] || '')].length;
 }
 
 /**
@@ -1163,6 +1200,8 @@ module.exports = {
   bankCode,
   findUiText,
   findUiId,
+  findKeypad,
+  pinMarks,
   maskAgrees,
   parseWithdrawRow,
   withdrawFromApi,
