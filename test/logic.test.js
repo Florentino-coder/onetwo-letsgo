@@ -626,6 +626,24 @@ test('a slip whose account begins with a 0 read as the letter O', () => {
   assert.equal(logic.slipDigits('QR Code Oxxford TOxxx12'), 'QR Code Oxxford TOxxx12');
 });
 
+test('a slip whose account begins with a 4 read as A, or has a digit too many', () => {
+  const text = ['รายการโอนเงินสำเร็จ', 'จำนวนเงิน', '2,936.00', 'ธนาคารออมสิน', '0204xxxx5783', 'ธนาคารกรุงไทย', 'AOxxxx9805', 'QR Code'].join('\n');
+  const slip = logic.parseSlip(text);
+  assert.equal(slip.receiver_account_masked, '40xxxx9805');
+  assert.equal(slip.receiver_bank, 'KTB');
+  assert.equal(logic.screenShows(logic.slipDigits(text), '4012349805'), true);
+  assert.equal(logic.screenShows(logic.slipDigits(text), '4112349805'), false);
+  // An A in a word, or in a mark that does not end in four digits, is left alone.
+  assert.equal(logic.slipDigits('Axxess Axxx12 KAxxxx1234'), 'Axxess Axxx12 KAxxxx1234');
+
+  const extra = logic.parseSlip(['รายการโอนเงินสำเร็จ', 'จำนวนเงิน', '600.00', 'ธนาคารออมสิน', '0204xxxx6087', 'ธนาคารกรุงไทย', '12xxxx65517'].join('\n'));
+  assert.equal(extra.receiver_account_masked, '12xxxx65517');
+  assert.equal(logic.endsAgree(extra.receiver_account_masked, '1212345517'), true);
+  assert.equal(logic.endsAgree(extra.receiver_account_masked, '1312345517'), false);
+  assert.equal(logic.endsAgree(extra.receiver_account_masked, '1212345518'), false);
+  assert.equal(logic.endsAgree('12xxxx5517', '125517'), false);
+});
+
 test('rows are paid oldest first', () => {
   const rows = [
     { key: 'c', requested: '14/10/2026 06:36:30', approved: '14/10/2026 06:37:00' },

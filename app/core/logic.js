@@ -514,19 +514,30 @@ function maskAgrees(masked, account) {
 
 /**
  * A slip's text with the letter O read as the digit 0 where it stands in an account whose middle
- * is hidden: the reader takes the 0 of 04xxxx2581 for an O now and then.
+ * is hidden: the reader takes the 0 of 04xxxx2581 for an O now and then, and the 4 of 40xxxx9805
+ * for an A.
  */
 function slipDigits(text) {
   const mask = `[${SLIP_MASK}]`;
   // Only a whole word of digits, hidden marks and Os is such an account: "Oxxford" is not.
-  return String(text || '').replace(new RegExp(`(?<![A-Za-z0-9])[0-9Oo]*${mask}{2,}[0-9Oo]*(?![A-Za-z0-9])`, 'g'), (word) => word.replace(/[Oo]/g, '0'));
+  return String(text || '').replace(new RegExp(`(?<![A-Za-z0-9])[0-9OoA]*${mask}{2,}[0-9OoA]*(?![A-Za-z0-9])`, 'g'), (word) => {
+    const zeros = word.replace(/[Oo]/g, '0');
+    // An A is read as a 4 only in a word that then ends in four digits, as an account does.
+    if (!word.includes('A')) return zeros;
+    const fours = zeros.replace(/A/g, '4');
+    return /\d{4}$/.test(fours) ? fours : word;
+  });
 }
 
-/** True when an account number begins and ends as a slip's account, read with its middle unsure, does. */
+/**
+ * True when an account number begins and ends as a slip's account, read with its middle unsure,
+ * does. Only the last four digits count as its end: the reader now and then adds a digit before
+ * them (12xxxx65517 for 12xxxx5517).
+ */
 function endsAgree(shown, account) {
   const [, head, tail] = String(shown || '').match(/^(\d{2,})x+(\d{4,})$/) || [];
   const whole = String(account || '').replace(/\D/g, '');
-  return Boolean(head) && whole.length > head.length + tail.length && whole.startsWith(head) && whole.endsWith(tail);
+  return Boolean(head) && whole.length > head.length + 4 && whole.startsWith(head) && whole.endsWith(tail.slice(-4));
 }
 
 /**
