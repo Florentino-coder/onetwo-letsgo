@@ -742,3 +742,16 @@ test('a bank pause, from a little before its start until its end', () => {
   assert.equal(logic.cleanPause({ from: '24:00', to: '03:00' }), null);
   assert.deepEqual(logic.DEFAULT_PAUSES.BBL, { from: '02:30', to: '03:00' });
 });
+
+test('a confirm point, a bank that refuses, and when its day turns', () => {
+  assert.deepEqual(logic.parseWorkflow('checkname {4}\nconfirmpoint\ntaptext ยืนยัน').map((step) => step.command), ['checkname', 'confirmpoint', 'taptext']);
+  assert.equal(logic.REFUSAL_RE.test('"ยืนยันข้อมูลการทำรายการ" did not come on the screen. The screen says: ไม่สามารถดำเนินการได้ในขณะนี้ กรุณาลองให | ตกลง'), true);
+  assert.equal(logic.REFUSAL_RE.test('The screen says: กรุณาลองใหม่อีกครั้งหรือติดต่อสาขาธนาคาร (E:03A:0099) | ตกลง'), true);
+  assert.equal(logic.REFUSAL_RE.test('"ธนาคารไทยพาณิชย์" is not on the screen.'), false);
+  // GSB's day turns at 23:00, other banks' at midnight.
+  const at = (d, h, m) => new Date(2026, 9, d, h, m).getTime();
+  assert.equal(logic.nextDayTurn('GSB', at(15, 2, 10)), at(15, 23, 0));
+  assert.equal(logic.nextDayTurn('GSB', at(15, 23, 30)), at(16, 23, 0));
+  assert.equal(logic.nextDayTurn('BBL', at(15, 2, 10)), at(16, 0, 0));
+  assert.equal(logic.LOW_FUNDS_TIMES, 2);
+});

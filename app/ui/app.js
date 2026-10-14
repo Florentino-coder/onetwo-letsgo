@@ -303,7 +303,7 @@ const WF_STEPS = [
   ['wait', 'รอ'], ['open', 'เปิดแอป'], ['close', 'ปิดแอป'], ['text', 'พิมพ์ข้อความ'], ['run', 'รันเวิร์กโฟลว์ย่อย'], ['pick', 'แตะตามชุดตำแหน่ง'], ['pin', 'กดรหัส PIN'], ['keyevent', 'กดปุ่ม'], ['screenshot', 'จับภาพหน้าจอ'],
   ['tap', 'แตะที่ X, Y'], ['swipe', 'ปัดจาก X, Y'], ['taptext', 'แตะที่ข้อความ'], ['taptext?', 'แตะข้อความ ถ้ามีบนจอ'], ['scrolltap', 'เลื่อนหาข้อความ แล้วแตะ'],
   ['waittext', 'รอจนข้อความขึ้น'], ['checktext', 'ต้องเจอข้อความหรือเลขบัญชี'], ['checktext?', 'ดูว่ามีข้อความหรือเลขบัญชี (ไม่หยุด)'], ['checkamount', 'ต้องเจอยอดเงิน'], ['checkname', 'ชื่อผู้รับต้องตรง'], ['stoptext', 'ถ้าเจอข้อความ ให้หยุด'],
-  ['slidetext', 'ลากปุ่มเลื่อนที่มีข้อความ'], ['tapid', 'แตะช่องตามชื่อในแอป'], ['pintext', 'กดรหัส PIN ตามตัวเลขบนแป้น'],
+  ['slidetext', 'ลากปุ่มเลื่อนที่มีข้อความ'], ['tapid', 'แตะช่องตามชื่อในแอป'], ['pintext', 'กดรหัส PIN ตามตัวเลขบนแป้น'], ['confirmpoint', 'จุดยืนยัน หลังจากนี้เงินอาจออก'],
 ];
 const WF_LABELS = { ...Object.fromEntries(WF_STEPS), tap: 'แตะ', swipe: 'ปัด', '#': 'หมายเหตุ' };
 const WF_DEFAULTS = { wait: '1000', keyevent: 'KEYCODE_ENTER' };
@@ -732,6 +732,7 @@ function stepText({ command, argument }) {
   if (command === 'scrolltap') return `เลื่อนหา "${argument}" แล้วแตะ`;
   if (command === 'waittext') return `รอจน "${argument}" ขึ้นบนจอ`;
   if (command === 'checktext') return `ต้องเจอ "${argument}" บนจอ ไม่เจอให้หยุด`;
+  if (command === 'confirmpoint') return 'จุดยืนยัน: หยุดก่อนนี้ เงินยังไม่ออกแน่นอน';
   if (command === 'checktext?') return `ดูว่ามี "${argument}" บนจอ ไม่เจอก็ทำต่อ`;
   if (command === 'checkamount') return `ต้องเจอยอด ${argument} บนจอ ไม่เจอให้หยุด`;
   if (command === 'checkname') return `ชื่อผู้รับบนจอต้องตรงกับ ${argument} ไม่ตรงให้หยุด`;

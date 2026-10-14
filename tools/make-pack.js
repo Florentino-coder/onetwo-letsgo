@@ -53,7 +53,8 @@ function main() {
     name, version,
     // A pack runs on the program that was current when it was built, and on any newer one.
     // A pack asks for the oldest program that knows every step it uses.
-    minApp: Object.values(workflows).some((text) => text.split(/\r?\n/).some((each) => /^pintext\s+\d+\s+once$/.test(each.trim()))) ? '0.27.3'
+    minApp: Object.values(workflows).some((text) => text.split(/\r?\n/).some((each) => each.trim() === 'confirmpoint')) ? '0.29.0'
+      : Object.values(workflows).some((text) => text.split(/\r?\n/).some((each) => /^pintext\s+\d+\s+once$/.test(each.trim()))) ? '0.27.3'
       : Object.values(workflows).some((text) => text.split(/\r?\n/).some((each) => each.trim().split(' ')[0] === 'checktext?')) ? '0.27.2'
       : Object.keys(jobs.flows || {}).length || Object.values(workflows).some((text) => text.split(/\r?\n/).some((each) => ['slidetext', 'tapid', 'pintext'].includes(each.trim().split(' ')[0]))) ? '0.26.0'
       : Object.values(workflows).some((text) => text.split(/\r?\n/).some((each) => each.trim().split(' ')[0] === 'checkname')) ? '0.25.0'

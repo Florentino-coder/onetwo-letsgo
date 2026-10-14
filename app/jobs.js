@@ -85,6 +85,12 @@ const DEFAULTS = {
   checkName: true,
   // On, a family name the confirm page shows must be checked too: a job that gives none is passed over.
   checkFamily: false,
+  // On, a row stopped before its workflow's "confirmpoint" (no money moved, for certain) may be put
+  // back in the queue from its red box or the history, to be paid again by a free phone.
+  requeue: true,
+  // On, a phone whose bank's app refuses to transfer before the confirm point rests until its bank's
+  // day turns, and the row goes back in the queue for another phone.
+  refuseRest: true,
   interval: 5,
   reload: false,
 };
@@ -637,6 +643,9 @@ function createJobs(host) {
       checking: host.watched().filter(checking).map((phone) => phone.serial),
       // The banks no phone pays to for now, by code.
       skipBanks: host.skipBanks(),
+      // The phones resting because their bank refused to transfer, and those whose money is low.
+      rests: rests(),
+      low: [...lowFunds],
       // Each bank's pause as set, and the phones in one now with the time it ends.
       pauses: host.bankPauses ? host.bankPauses() : {},
       pauseLead: logic.PAUSE_LEAD_MIN,
@@ -1136,6 +1145,11 @@ function createJobs(host) {
 
   /** Why everything is stopped, or null. Kept in the settings, so a restart does not clear it. */
   const halted = () => (host.store.config.withdraw_halt && typeof host.store.config.withdraw_halt === 'object' ? host.store.config.withdraw_halt : null);
+  /** The phones resting because their bank refused to transfer, by serial: { until, message, key }. Kept in the settings. */
+  const rests = () => {
+    const kept = host.store.config.withdraw_rests && typeof host.store.config.withdraw_rests === 'object' ? host.store.config.withdraw_rests : {};
+    return Object.fromEntries(Object.entries(kept).filter(([, rest]) => rest && Number(rest.until) > Date.now()));
+  };
   /** The phones that are stopped, by serial: { key, message, at }. Kept in the settings too. */
   const stops = () => (host.store.config.withdraw_stops && typeof host.store.config.withdraw_stops === 'object' ? host.store.config.withdraw_stops : {});
 
@@ -1530,12 +1544,25 @@ function createJobs(host) {
 
   // Phones already told to be out of money, so each is told once until it has money again.
   const broke = new Set();
+  // The phones whose money is low, warned of once until they are topped up.
+  const lowFunds = new Set();
 
   /** Tell the operator, once, of each phone whose account holds less than its smallest amount. */
   function checkFunds() {
     for (const phone of host.phones()) {
       const balance = balanceOf(phone);
       const out = phone.min !== null && balance !== null && balance < phone.min;
+      // Low: still above its smallest amount, but under a few times it. Said once until it is topped up.
+      const low = !out && phone.min !== null && balance !== null && balance < phone.min * logic.LOW_FUNDS_TIMES;
+      if (!low) lowFunds.delete(phone.serial);
+      else if (!lowFunds.has(phone.serial)) {
+        lowFunds.add(phone.serial);
+        const message = `${phone.label}: เงินใกล้หมด คงเหลือ ${balance.toFixed(2)} เติมเงินก่อนต่ำกว่ายอดต่ำสุด ${phone.min}`;
+        audit('low', '', { serial: phone.serial, phone: phone.label, message });
+        host.log(message);
+        if (host.notify) host.notify(message);
+        publish();
+      }
       if (!out) broke.delete(phone.serial);
       else if (!broke.has(phone.serial)) {
         broke.add(phone.serial);
@@ -1600,6 +1627,7 @@ function createJobs(host) {
     if (noFlow(config(), phone)) return 'noflow';
     // In its bank's pause a phone starts nothing; a row it is paying already goes on.
     if (pausedUntil(phone)) return 'paused';
+    if (rests()[phone.serial]) return 'refused';
     // An account the back office does not list cannot be seen to be on, and a row paid from it could not be closed.
     if (unlisted(phone)) return 'missing';
     const over = capOf(phone, value, toCode);
@@ -1772,7 +1800,7 @@ function createJobs(host) {
         const phone = phoneFor(order);
         const entry = ledger[order.key];
         // Say why no phone takes a row whose amount is in a phone's range.
-        return { ...order, state: entry ? entry.state : '', detail: entry ? entry.detail || '' : '', serial: phone ? phone.serial : '', phone: phone ? phone.label : '', short: phone ? '' : whyNot(order), bankCode: logic.bankCode(order.bank) };
+        return { ...order, state: entry && entry.state !== 'returned' ? entry.state : '', detail: entry ? entry.detail || '' : '', serial: phone ? phone.serial : '', phone: phone ? phone.label : '', short: phone ? '' : whyNot(order), bankCode: logic.bankCode(order.bank) };
       }),
     };
   }
@@ -1798,7 +1826,7 @@ function createJobs(host) {
     if (!byApi && !profileFor(contents.getURL())) throw new Error('There is no close-job profile for this back-office address.');
     const listed = orders.list.find((each) => each.key === key);
     if (!listed) throw new Error('That withdrawal is no longer on the page.');
-    if (ledger[key] || [...paying.values()].some((each) => each.key === key)) throw new Error('That withdrawal was already begun by this app, so it is not begun again.');
+    if ((ledger[key] && ledger[key].state !== 'returned') || [...paying.values()].some((each) => each.key === key)) throw new Error('That withdrawal was already begun by this app, so it is not begun again.');
     const phone = phoneFor(listed, true);
     if (!phone) {
       if (phoneFor(listed)) throw new Error(`Every phone that can pay ${listed.amount} is busy. Try again in a moment.`);
@@ -1830,11 +1858,13 @@ function createJobs(host) {
       await readOrders(false);
       order = orders.list.find((each) => each.key === key);
       if (!order) throw new Error('That withdrawal is no longer on the page.');
-      if (ledger[key]) throw new Error('That withdrawal was already begun by this app, so it is not begun again.');
+      if (ledger[key] && ledger[key].state !== 'returned') throw new Error('That withdrawal was already begun by this app, so it is not begun again.');
 
       // From here on the phone is touched: every fault is a stop.
       begun = true;
-      mark(order, 'started', { serial, phone: phone.label });
+      // A row put back in the queue starts afresh: what its last try said is kept only as a count.
+      mark(order, 'started', { serial, phone: phone.label, safe: false, detail: '', tries: ((ledger[key] || {}).tries || 0) + 1 });
+      if (host.pastConfirm) host.pastConfirm(serial);
       audit('start', key, { ...order, serial, phone: phone.label, workflow: flow.workflow });
       stage('running');
       const since = await host.phoneClock(serial);
@@ -1899,8 +1929,24 @@ function createJobs(host) {
         audit('name', key, { serial, message: error.message });
         host.log(`Withdrawal ${order.amount} to ${order.bank} was passed over on ${phone.label}: ${error.message}`, 'error');
         if (host.notify) host.notify(`${phone.label}: ข้ามรายการ ${order.amount} เทียบชื่อบัญชีไม่ได้ เงินยังไม่ออก`);
+      } else if (begun && !closing && knownUnpaid(flowText, serial) && current.refuseRest !== false && logic.REFUSAL_RE.test(error.message)) {
+        // The bank's app refused before the confirm point: no money moved. The phone rests until its
+        // bank's day turns, and the row goes back in the queue for another phone.
+        const code = logic.bankCode(phone.bank) || current.bank;
+        const until = logic.nextDayTurn(code);
+        mark(order, 'returned', { detail: error.message });
+        host.store.config.withdraw_rests = { ...rests(), [serial]: { until, message: error.message, key, at: new Date().toISOString() } };
+        host.store.saveConfig();
+        lastGood.delete(serial);
+        audit('refused', key, { serial, message: error.message, until: new Date(until).toISOString() });
+        const at = new Date(until);
+        const clock = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+        host.log(`${phone.label}: the bank refused to transfer ${order.amount}; the phone rests until ${clock}, the row is back in the queue.`, 'error');
+        if (host.notify) host.notify(`${phone.label}: ธนาคารไม่ให้โอน (วงเงินอาจเต็ม) พักเครื่องถึง ${clock} รายการ ${order.amount} คืนเข้าคิว เงินยังไม่ออก`);
       } else if (begun) {
-        mark(order, 'failed', { detail: error.message });
+        // Stopped before the workflow's confirm point: no money moved, and the row may go back in the queue.
+        const unpaid = !closing && knownUnpaid(flowText, serial);
+        mark(order, 'failed', { detail: error.message, safe: unpaid });
         audit('error', key, { serial, message: error.message });
         // The phone did its part when the fault is in closing: that is the page's fault, and every phone's.
         if (closing) halt(key, error.message);
@@ -1946,7 +1992,7 @@ function createJobs(host) {
       if (payAuto && !halted() && orders.note === 'ok') {
         // The row asked for first is paid first. A row no phone can take now does not hold up the next.
         for (const order of logic.oldestFirst(orders.list)) {
-          if (ledger[order.key] || [...paying.values()].some((each) => each.key === order.key)) continue;
+          if ((ledger[order.key] && ledger[order.key].state !== 'returned') || [...paying.values()].some((each) => each.key === order.key)) continue;
           if (!phoneFor(order, true)) continue;
           // Not waited for: the phones pay side by side. A fault stops its own phone.
           pay(order.key).catch(() => {});
@@ -1967,6 +2013,41 @@ function createJobs(host) {
    * money moved. It stays in the ledger, so it is still never begun again, but no longer shows as
    * a fault.
    */
+  /** True when a run that just stopped had not passed its workflow's confirm point: no money moved. A workflow without one says nothing. */
+  function knownUnpaid(text, serial) {
+    if (!host.pastConfirm || !/^\s*confirmpoint\s*$/m.test(String(text || ''))) return false;
+    return !host.pastConfirm(serial);
+  }
+
+  /**
+   * Put a row that is known not to have been paid back in the queue: one stopped before its
+   * workflow's confirm point, or one passed over because the names could not be compared. A free
+   * phone pays it again. The phone it stopped is reset with it.
+   */
+  function requeue(key) {
+    if (config().requeue === false) throw new Error('Putting rows back in the queue is switched off.');
+    const entry = ledger[key];
+    if (!entry) throw new Error('That row is not in the history.');
+    if (!((entry.state === 'failed' && entry.safe) || entry.state === 'name')) throw new Error('Only a row that is known not to have been paid can go back in the queue.');
+    mark({ key, account: entry.account, amount: entry.amount, bank: entry.bank, requested: entry.requested }, 'returned', {});
+    audit('requeued', key, { was: entry.state, serial: entry.serial || '' });
+    const stoppedOn = Object.entries(stops()).find(([, stop]) => stop.key === key);
+    if (stoppedOn) unhalt(stoppedOn[0]);
+    publish();
+    return view();
+  }
+
+  /** Let a phone that rests because its bank refused take rows again before its bank's day turns. */
+  function unrest(serial) {
+    const rest = { ...rests() };
+    delete rest[serial];
+    host.store.config.withdraw_rests = rest;
+    host.store.saveConfig();
+    audit('unrest', '', { serial });
+    publish();
+    return view();
+  }
+
   function resolve(key, note) {
     const entry = ledger[key];
     if (!entry) throw new Error('That row is not in the history.');
@@ -2155,7 +2236,7 @@ function createJobs(host) {
       .slice(0, 500);
   }
 
-  return { view, save, setApiToken, open, pick, record, clear, read, runOnce, setAuto, screen, close, refreshOrders, pay, setPayAuto, unhalt, resolve, switchAccount, signedIn, slipFile, search };
+  return { view, save, setApiToken, open, pick, record, clear, read, runOnce, setAuto, screen, close, refreshOrders, pay, setPayAuto, unhalt, resolve, requeue, unrest, switchAccount, signedIn, slipFile, search };
 }
 
 module.exports = { createJobs };

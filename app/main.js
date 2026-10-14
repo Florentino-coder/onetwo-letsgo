@@ -54,6 +54,8 @@ const SCREEN_STEPS = new Set(['taptext', 'taptext?', 'scrolltap', 'waittext', 'c
 // How long the drag of a "slide to confirm" bar takes.
 const SLIDE_MS = 700;
 const screens = new Map();
+// The phones whose run has passed its "confirmpoint" since the program last asked: past it, money may move.
+const pastConfirm = new Set();
 // What a "checktext?" step saw on each phone's screen since the program last asked: serial -> Set of values.
 const seenOnScreen = new Map();
 // How long a "checktext?" step looks before it goes on without the value.
@@ -251,6 +253,12 @@ const jobs = createJobs({
   inputsOf: (text) => logic.workflowInputs(logic.parseWorkflow(text)),
   readScreen: (serial) => readScreen(serial),
   readSlip: (serial, since) => readSlip(serial, since),
+  // Whether this phone's run passed its "confirmpoint" since the last time this was asked; asking forgets it.
+  pastConfirm: (serial) => {
+    const past = pastConfirm.has(serial);
+    pastConfirm.delete(serial);
+    return past;
+  },
   // The values a "checktext?" step saw on this phone since the last time this was asked; asking forgets them.
   screenSaw: (serial) => {
     const seen = seenOnScreen.get(serial) || new Set();
@@ -958,6 +966,10 @@ async function runWorkflowStep(device, step, workflowName) {
       // The value is the job's, not the screen's: saying it tells nothing the job did not.
       throw new Error(step.command === 'checkamount' ? `The phone's screen does not show the amount ${step.argument}. Nothing was confirmed.` : `The phone's screen does not show "${String(step.argument).replace(/\d(?=\d{4})/g, 'x')}". Nothing was confirmed.`);
     }
+    case 'confirmpoint':
+      // Marks the point after which a run may move money: the step after it is the one that confirms.
+      pastConfirm.add(serial);
+      return 'from here on the money may move';
     case 'checktext?': {
       // A look that never stops the run: it notes whether the value is on the screen, such as the
       // account on a bank app's own success page, for the slip check to lean on when a picture is misread.
@@ -1455,7 +1467,7 @@ function publicState() {
 // What the user program's window may ask for. Everything else belongs to the studio.
 const USER_CALLS = new Set([
   'state:get', 'devices:scan', 'adb:restart', 'device:meta', 'device:pin', 'device:pin-show', 'device:range', 'device:pay', 'device:account', 'device:skip', 'banks:skip', 'banks:pause',
-  'jobs:set', 'jobs:apitoken', 'jobs:open', 'jobs:orders', 'jobs:pay', 'jobs:payauto', 'jobs:unhalt', 'jobs:resolve',
+  'jobs:set', 'jobs:apitoken', 'jobs:open', 'jobs:orders', 'jobs:pay', 'jobs:payauto', 'jobs:unhalt', 'jobs:resolve', 'jobs:requeue', 'jobs:unrest',
   'folder:open', 'update:check', 'update:restart',
   'license:set', 'pack:import', 'pack:rollback', 'user:setup', 'user:signed',
   'slip:view', 'history:search', 'report:save', 'telegram:set', 'telegram:test', 'user:prefs',
@@ -1464,7 +1476,7 @@ const USER_CALLS = new Set([
 const UNLICENSED_CALLS = new Set(['state:get', 'license:set', 'update:check', 'update:restart', 'folder:open']);
 // The settings of a job the user program may change; the rest come from the pack. The link
 // addresses stay on this computer, like the back-office link, and are set once at first run.
-const USER_JOB_KEYS = ['url', 'filter', 'apiBase', 'apiOrigin', 'apiSettlementPath', 'checkName', 'checkFamily'];
+const USER_JOB_KEYS = ['url', 'filter', 'apiBase', 'apiOrigin', 'apiSettlementPath', 'checkName', 'checkFamily', 'requeue', 'refuseRest'];
 
 function handle(channel, handler) {
   ipcMain.handle(channel, async (_event, payload) => {
@@ -1982,6 +1994,8 @@ function registerIpc() {
   });
   handle('jobs:unhalt', (request) => jobs.unhalt(request && request.serial ? String(request.serial) : ''));
   handle('jobs:resolve', ({ key, note }) => jobs.resolve(String(key || ''), note));
+  handle('jobs:requeue', ({ key }) => jobs.requeue(String(key || '')));
+  handle('jobs:unrest', ({ serial }) => jobs.unrest(String(serial || '')));
 
   handle('update:check', () => runUpdateCheck());
 

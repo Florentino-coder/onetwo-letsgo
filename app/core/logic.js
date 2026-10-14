@@ -9,7 +9,7 @@ const KEY_ALIASES = {
   wake: 'KEYCODE_WAKEUP',
   sleep: 'KEYCODE_SLEEP',
 };
-const WORKFLOW_COMMANDS = new Set(['wait', 'keyevent', 'open', 'text', 'screenshot', 'tap', 'swipe', 'run', 'pick', 'pin', 'close', 'taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checkamount', 'checkname', 'stoptext', 'slidetext', 'tapid', 'pintext', 'checktext?', ...Object.keys(KEY_ALIASES)]);
+const WORKFLOW_COMMANDS = new Set(['wait', 'keyevent', 'open', 'text', 'screenshot', 'tap', 'swipe', 'run', 'pick', 'pin', 'close', 'taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checkamount', 'checkname', 'stoptext', 'slidetext', 'tapid', 'pintext', 'checktext?', 'confirmpoint', ...Object.keys(KEY_ALIASES)]);
 // Steps that read the phone's screen for words or values.
 const SCREEN_COMMANDS = ['taptext', 'taptext?', 'scrolltap', 'waittext', 'checktext', 'checktext?', 'checkamount', 'checkname', 'stoptext', 'slidetext', 'tapid'];
 // Steps whose argument may hold {1}, {2}… of a job.
@@ -694,6 +694,19 @@ function pauseUntil(pause, now = new Date(), lead = PAUSE_LEAD_MIN) {
   return inside ? kept.to : '';
 }
 
+// What a bank's app says when it will not transfer from the account for now, such as when its
+// daily limit is used up: MyMo's "cannot be done at this time" and its error E:03A.
+const REFUSAL_RE = /ไม่สามารถดำเนินการได้ในขณะนี้|E:03A/;
+// A phone's money is low once what is left is under this many times its smallest amount.
+const LOW_FUNDS_TIMES = 2;
+
+/** When the next day of a bank's limits begins, after `now`: a time in milliseconds. */
+function nextDayTurn(bankCode, now = Date.now()) {
+  const next = new Date(dayStart(bankCode, now));
+  next.setDate(next.getDate() + 1);
+  return next.getTime();
+}
+
 /** When the day that a bank's limits count by began, as of `now`: a time in milliseconds. */
 function dayStart(bankCode, now = Date.now()) {
   const at = new Date(now);
@@ -1226,6 +1239,9 @@ module.exports = {
   OWN_LIMIT_BANKS,
   DAY_TURN_HOUR,
   dayStart,
+  nextDayTurn,
+  REFUSAL_RE,
+  LOW_FUNDS_TIMES,
   PAUSE_LEAD_MIN,
   DEFAULT_PAUSES,
   cleanPause,

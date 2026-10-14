@@ -7,7 +7,7 @@ const S = { state: null, page: 'home', wizard: 'link', signedIn: false, busy: fa
 const SPEEDS = [[1.5, 'ช้า (เครื่องหรือเน็ตช้า)'], [1, 'ปกติ'], [0.8, 'เร็ว'], [0.6, 'เร็วมาก']];
 const BANK = 'ธนาคารกรุงเทพ';
 const PHONE_STATE = { running: 'กำลังโอน', checking: 'อ่านสลิป', closing: 'ปิดงาน', resting: 'กำลังพัก' };
-const ROW_STATE = { started: ['ค้าง ต้องตรวจ', 'bad'], paid: ['จ่ายแล้ว รอปิดงาน', 'run'], done: ['ปิดงานแล้ว', 'ok'], failed: ['ไม่สำเร็จ', 'bad'], name: ['ชื่อไม่ตรง', 'warn'], resolved: ['จัดการแล้ว', 'wait'] };
+const ROW_STATE = { returned: ['คืนเข้าคิว', 'run'], started: ['ค้าง ต้องตรวจ', 'bad'], paid: ['จ่ายแล้ว รอปิดงาน', 'run'], done: ['ปิดงานแล้ว', 'ok'], failed: ['ไม่สำเร็จ', 'bad'], name: ['ชื่อไม่ตรง', 'warn'], resolved: ['จัดการแล้ว', 'wait'] };
 const LICENSE_REASON = { missing: 'ยังไม่ได้ใส่รหัสเปิดใช้', forged: 'รหัสเปิดใช้ไม่ถูกต้อง', machine: 'รหัสนี้เป็นของคอมเครื่องอื่น', expired: 'รหัสเปิดใช้หมดอายุแล้ว', cancelled: 'รหัสเปิดใช้ถูกยกเลิก', offline: 'ต้องต่ออินเทอร์เน็ตเพื่อตรวจรหัสเปิดใช้' };
 
 // ── small tools ──────────────────────────────────────────────────────────
@@ -33,6 +33,8 @@ function h(tag, attrs, ...children) {
 
 const money = (value) => Number(value).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const whole = (value) => Number(value).toLocaleString('th-TH', { maximumFractionDigits: 2 });
+// A time of day as hours and minutes, "23:00".
+const clockOf = (at) => { const d = new Date(at); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 const timeOf = (at) => (at ? new Date(at).toLocaleTimeString('th-TH', { hour12: false }) : '');
 const dayOf = (at) => new Date(at).toLocaleDateString('th-TH', { day: '2-digit', month: '2-digit' });
 /** An account number is never shown whole: the last four digits are enough to tell accounts apart. */
@@ -79,6 +81,10 @@ const FAULTS = [
   [/does not show the amount ([\d.,]+)/, (m) => `หน้ายืนยันของแอปธนาคารไม่แสดงยอด ${m[1]} โปรแกรมจึงไม่กดยืนยัน เงินยังไม่ออก`],
   [/screen does not show "([^"]*)"/, (m) => `หน้ายืนยันของแอปธนาคารไม่แสดงเลขบัญชี ${m[1]} โปรแกรมจึงไม่กดยืนยัน เงินยังไม่ออก`],
   [/The phone shows "([^"]*)"/, (m) => `แอปธนาคารขึ้นข้อความ: ${m[1]}`],
+  [/The PIN field shows (no count|(\d+) mark\(s\)) where (\d+) keys were pressed/, (m) => `ช่อง PIN แสดง ${m[2] ? `${m[2]} จุด` : 'นับจุดไม่ได้'} แต่กดไปแล้ว ${m[3]} หลัก โปรแกรมจึงไม่กดหลักสุดท้าย PIN ไม่ถูกส่ง`],
+  [/A key of the PIN is not on the screen/, () => 'หาแป้นตัวเลขของ PIN บนจอไม่เจอ PIN ไม่ถูกส่งครบ'],
+  [/Putting rows back in the queue is switched off/, () => 'ปิดการคืนรายการเข้าคิวอยู่ เปิดได้ที่หน้าตั้งค่า'],
+  [/Only a row that is known not to have been paid/, () => 'คืนเข้าคิวได้เฉพาะรายการที่รู้แน่ว่าเงินยังไม่ออก'],
   [/"([^"]*)" (?:is not on the screen|did not come on the screen)/, (m) => `ไม่พบ "${m[1]}" บนจอมือถือ`],
   [/The screen could not be read/, () => 'อ่านหน้าจอมือถือไม่ได้ สายหรือการเชื่อมต่ออาจหลุด'],
   [/Paste the activation code/, () => 'วางรหัสเปิดใช้ก่อน'],
@@ -264,12 +270,16 @@ function phoneView(device) {
   else if (!device.payOn || (listed && listed.on === false)) word = ['ปิดอยู่', 'wait'];
   else if (jobs.accounts.fresh && !listed) word = ['ไม่พบบัญชีในหลังบ้าน', 'bad'];
   else if (balance !== null && balance < device.amountMin) word = ['เงินหมด', 'bad'];
+  else if (jobs.rests && jobs.rests[device.serial]) word = [`ธนาคารไม่ให้โอน ถึง ${clockOf(jobs.rests[device.serial].until)}`, 'warn'];
   // A phone with a cap for its own bank and one for others is at its cap only when both are used up.
   const caps = jobs.caps && jobs.caps[device.serial] ? jobs.caps[device.serial] : { own: 0, other: 0 };
   const split = twoCaps(device.pay.bank) && device.pay.capOwn !== null && device.pay.capOwn !== undefined;
   const full = split ? caps.own >= device.pay.capOwn && device.pay.cap !== null && caps.other >= device.pay.cap : device.pay.cap !== null && caps.own + caps.other >= device.pay.cap;
   if (word[0] === 'พร้อม' && full) word = ['ถึงเพดาน', 'wait'];
-  return { device, balance, spent, caps, split, stop, word, ready: word[0] === 'พร้อม' || Boolean(working) };
+  // Low money: the phone still pays, so it still counts as ready.
+  const low = word[0] === 'พร้อม' && (jobs.low || []).includes(device.serial);
+  if (low) word = ['เงินใกล้หมด', 'warn'];
+  return { device, balance, spent, caps, split, stop, word, ready: word[0] === 'พร้อม' || low || Boolean(working) };
 }
 
 /** In link mode a pass held is "signed in"; otherwise the back-office window must be signed in. */
@@ -370,15 +380,21 @@ function stopBlock(stop, serial) {
   const entry = jobs.history.find((each) => each.key === stop.key);
   const device = S.state.devices.find((each) => each.serial === serial);
   const about = entry ? `รายการ ${money(entry.amount)} ไป${entry.bank || ''} ${entry.account}${entry.holder ? ` (${entry.holder})` : ''}` : 'ไม่มีรายการที่เกี่ยวข้อง';
-  const open = entry && entry.state !== 'done' && entry.state !== 'resolved';
+  const open = entry && entry.state !== 'done' && entry.state !== 'resolved' && entry.state !== 'returned';
+  // Stopped before the confirm point: no money moved, for certain.
+  const unpaid = Boolean(entry && entry.safe) || /is not the name of the job/.test(stop.message);
+  const canRequeue = Boolean(entry && entry.safe && entry.state === 'failed') && S.state.jobs.config.requeue !== false;
   return h('div', { class: 'alert' },
     h('div', { class: 'x' },
       h('b', null, `${device ? `${device.label}: ` : ''}${thai(stop.message)}`),
       h('div', null, `${about} · หยุดเมื่อ ${timeOf(stop.at)}`),
-      h('ol', { class: 'todo' }, (/is not the name of the job/.test(stop.message)
-        ? ['เงินยังไม่ออก โปรแกรมหยุดที่หน้ายืนยันและไม่ได้กดยืนยัน', 'ตรวจชื่อและเลขบัญชีของรายการนี้ในหลังบ้าน ถ้าถูกต้อง โอนรายการนี้เองด้วยมือ โปรแกรมไม่จ่ายรายการนี้ซ้ำ', 'กด "จัดการแล้ว" จากนั้นจึงกดรีเซ็ต']
+      h('ol', { class: 'todo' }, (canRequeue
+        ? ['เงินยังไม่ออก โปรแกรมหยุดก่อนกดยืนยัน', 'กด "คืนเข้าคิวและรีเซ็ต" เพื่อให้เครื่องที่ว่างจ่ายรายการนี้ใหม่', 'หรือโอนเองด้วยมือ ปิดงานในหลังบ้าน แล้วกด "จัดการแล้ว" และรีเซ็ต']
+        : unpaid
+        ? ['เงินยังไม่ออก โปรแกรมหยุดก่อนกดยืนยัน', 'ตรวจชื่อและเลขบัญชีของรายการนี้ในหลังบ้าน ถ้าถูกต้อง โอนรายการนี้เองด้วยมือ โปรแกรมไม่จ่ายรายการนี้ซ้ำ', 'กด "จัดการแล้ว" จากนั้นจึงกดรีเซ็ต']
         : ['เงินอาจออกแล้ว เปิดแอปธนาคารของเครื่องดูรายการล่าสุดก่อน', 'ถ้าเงินออกแล้ว ปิดงานในหลังบ้านเอง ถ้าเงินยังไม่ออก โอนรายการนี้เองด้วยมือ โปรแกรมไม่จ่ายรายการนี้ซ้ำ', 'กด "จัดการแล้ว" จากนั้นจึงกดรีเซ็ต']).map((step) => h('li', null, step)))),
     h('div', { class: 'acts' },
+      canRequeue && h('button', { class: 'btn gold', onclick: () => act('jobs:requeue', { key: stop.key }, 'คืนรายการเข้าคิวและรีเซ็ตเครื่องแล้ว') }, 'คืนเข้าคิวและรีเซ็ต'),
       open && h('button', { class: 'btn', onclick: () => act('jobs:resolve', { key: stop.key, note: 'ตรวจด้วยมือ' }, 'บันทึกว่าจัดการแล้ว') }, 'จัดการแล้ว'),
       h('button', { class: 'btn red', disabled: Boolean(open), title: open ? 'กด "จัดการแล้ว" ก่อน' : '', onclick: () => act('jobs:unhalt', { serial }, 'รีเซ็ตแล้ว') }, serial ? 'รีเซ็ตเครื่องนี้' : 'รีเซ็ต')));
 }
@@ -418,6 +434,7 @@ function home() {
     off: ['บัญชีปิดอยู่', 'wait', 'บัญชีของเครื่องที่รับยอดนี้ปิดอยู่'], stopped: ['เครื่องหยุด', 'bad', 'เครื่องที่รับยอดนี้หยุดอยู่ รอตรวจและรีเซ็ต'],
     noflow: ['ไม่มีชุดงาน', 'bad', 'ชุดงานไม่มีเวิร์กโฟลว์ของแอปธนาคารที่เครื่องนี้ใช้'],
     checking: ['กำลังตรวจสอบ', 'run', 'เครื่องที่รับยอดนี้เพิ่งเสียบสาย กำลังตรวจสอบ'], missing: ['ไม่พบบัญชี', 'bad', 'ไม่พบบัญชีของเครื่องในหลังบ้าน'],
+    refused: ['ธนาคารไม่ให้โอน', 'warn', 'เครื่องที่รับยอดนี้พักอยู่ เพราะธนาคารไม่ให้โอน (วงเงินอาจเต็ม)'],
     paused: ['ธนาคารพัก', 'wait', 'แอปธนาคารของเครื่องที่รับยอดนี้อยู่ในช่วงพัก รายการรอจนพ้นช่วง'],
     skipbank: ['ข้ามธนาคาร', 'warn', 'ธนาคารนี้ถูกตั้งให้ข้ามอยู่'], nobank: ['ไม่รองรับ', 'warn', 'ธนาคารนี้ไม่อยู่ในรายการของแอปธนาคาร'],
   };
@@ -440,6 +457,14 @@ function home() {
   };
 
   const ownSkips = devices.filter((device) => device.skipBanks.length);
+  // Phones resting because their bank refused: one line each, with a button to use the phone again now.
+  const restNotes = Object.entries(jobs.rests || {}).map(([serial, rest]) => {
+    const device = devices.find((each) => each.serial === serial);
+    return h('div', { class: 'alert soft' },
+      h('div', { class: 'x' }, h('b', null, `${device ? device.label : serial}: ธนาคารไม่ให้โอน พักถึง ${clockOf(rest.until)}`),
+        h('div', null, `${thai(rest.message)} · รายการที่ค้างคืนเข้าคิวแล้ว เงินยังไม่ออก`)),
+      h('div', { class: 'acts' }, h('button', { class: 'btn', onclick: () => act('jobs:unrest', { serial }, 'ใช้เครื่องนี้ต่อแล้ว') }, 'ใช้ต่อ')));
+  });
   const tags = h('div', { class: 'tags' },
     pausedNow(jobs).map(([code, until]) => h('span', { class: 'pill wait', title: 'เครื่องของธนาคารนี้ไม่เริ่มรายการใหม่ในช่วงพัก ตั้งได้ที่หน้าตั้งค่า' }, bankMark(code), `${code} พัก ถึง ${until}`)),
     jobs.skipBanks.length ? h('span', { class: 'pill warn', title: 'รายการไปธนาคารนี้ไม่ถูกจ่าย เอาออกได้ที่หน้าตั้งค่า' }, 'ข้ามธนาคารทุกเครื่อง:', jobs.skipBanks.map((code) => bankMark(code)), jobs.skipBanks.join(', ')) : null,
@@ -457,6 +482,7 @@ function home() {
       h('button', { class: `sw ${jobs.payAuto ? 'on' : ''}`, disabled: Boolean(jobs.halt) || out, onclick: () => act('jobs:payauto', { on: !jobs.payAuto }) }, h('i'), 'จ่ายอัตโนมัติ')),
     jobs.halt && stopBlock(jobs.halt, ''),
     stopped.map(([serial, stop]) => stopBlock(stop, serial)),
+    restNotes,
     noPack && h('div', { class: 'alert' },
       h('div', { class: 'x' }, h('b', null, 'โปรแกรมยังไม่มีชุดงาน จึงยังไม่ทำงาน'), h('div', null, 'ชุดงานคือขั้นตอนโอนและปิดงานจากผู้พัฒนา'), h('small', null, 'กด "ตรวจหาชุดงาน" เพื่อรับจากผู้พัฒนาทางอินเทอร์เน็ต หรือกด "นำเข้าจากไฟล์" ถ้าได้รับไฟล์ชุดงานมา')),
       h('div', { class: 'acts' },
@@ -486,6 +512,8 @@ function historyRow(entry) {
   const label = (serial) => (devices.find((device) => device.serial === serial) || { label: serial || '—' }).label;
   const state = ROW_STATE[entry.state] || [entry.state, 'wait'];
   const open = entry.state === 'started' || entry.state === 'paid' || entry.state === 'name';
+  // A row known not to have been paid may go back in the queue.
+  const back = S.state.jobs.config.requeue !== false && ((entry.state === 'failed' && entry.safe) || entry.state === 'name');
   // What the bank app showed where the names could not be compared.
   const shown = entry.state === 'name' ? (/screen "([^"]*)"/.exec(entry.detail || '') || [])[1] : '';
   return h('div', { class: 'row past' },
@@ -497,6 +525,7 @@ function historyRow(entry) {
         shown ? ` · แอปแสดง "${shown === 'no name' ? 'ไม่มีชื่อ' : shown}"` : '',
         entry.slip ? [' · ', h('button', { class: 'lk', onclick: () => openSlip(entry) }, 'ดูสลิป')] : null)),
     h('span', { class: 'do' }, pill(state[0], state[1]),
+      back ? h('button', { class: 'lk', onclick: () => act('jobs:requeue', { key: entry.key }, 'คืนรายการเข้าคิวแล้ว') }, 'คืนเข้าคิว') : null,
       open ? h('button', { class: 'lk', onclick: () => act('jobs:resolve', { key: entry.key, note: 'ตรวจด้วยมือ' }, 'บันทึกว่าจัดการแล้ว') }, 'จัดการแล้ว') : null));
 }
 
@@ -616,6 +645,8 @@ function settings() {
         h('div', { class: 'h gap' }, 'การจ่าย'),
         option('เช็กชื่อผู้รับ', 'ชื่อบนหน้ายืนยันต้องตรงกับรายการ จึงกดยืนยัน', jobs.config.checkName !== false, () => act('jobs:set', { checkName: jobs.config.checkName === false })),
         option('ต้องมีนามสกุล', 'แอปแสดงนามสกุล แต่รายการไม่มี ให้ข้ามรายการ', Boolean(jobs.config.checkFamily), () => act('jobs:set', { checkFamily: !jobs.config.checkFamily }), jobs.config.checkName === false),
+        option('คืนรายการเข้าคิว', 'เครื่องหยุดก่อนกดยืนยัน เงินยังไม่ออก มีปุ่มให้คืนรายการเข้าคิวเพื่อจ่ายใหม่', jobs.config.requeue !== false, () => act('jobs:set', { requeue: jobs.config.requeue === false })),
+        option('พักเครื่องเมื่อธนาคารไม่ให้โอน', 'แอปขึ้นว่าทำรายการไม่ได้ก่อนยืนยัน พักเครื่องถึงรอบวงเงินใหม่ และคืนรายการเข้าคิว', jobs.config.refuseRest !== false, () => act('jobs:set', { refuseRest: jobs.config.refuseRest === false })),
         option('ช่วงยอดหน้าเว็บ', 'ให้หลังบ้านส่งเฉพาะยอดในช่วงของเครื่อง', Boolean(jobs.config.filter), () => act('jobs:set', { filter: !jobs.config.filter })),
         h('div', { class: 'h gap' }, 'ช่วงพักของธนาคาร'),
         pauseFields(jobs),

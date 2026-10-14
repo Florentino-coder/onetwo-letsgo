@@ -239,3 +239,7 @@ select.inp { appearance: none; }
 .pause { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 0; }
 .pause .b { display: inline-flex; align-items: center; gap: 8px; min-width: 150px; }
 .pause .inp { width: auto; }
+
+/* A phone resting because its bank refused to transfer: a quieter box than a stop. */
+.alert.soft { border-color: var(--gold); background: var(--gold-soft); }
+.alert.soft b { color: var(--gold); }
