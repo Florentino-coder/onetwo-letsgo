@@ -641,3 +641,28 @@ test('rows are paid oldest first', () => {
   // A new month and a new year come after the old ones, which they would not as text.
   assert.deepEqual(logic.oldestFirst([{ key: 'new', requested: '01/01/2027 00:00:01' }, { key: 'old', requested: '31/12/2026 23:59:59' }]).map((row) => row.key), ['old', 'new']);
 });
+
+test('a day that begins at an hour of its own, and two daily caps', () => {
+  const at = (hour, minute = 0) => new Date(2026, 9, 14, hour, minute).getTime();
+  assert.equal(logic.dayStart('BBL', at(10)), new Date(2026, 9, 14, 0, 0).getTime());
+  assert.equal(logic.dayStart('GSB', at(10)), new Date(2026, 9, 13, 23, 0).getTime());
+  assert.equal(logic.dayStart('GSB', at(22, 59)), new Date(2026, 9, 13, 23, 0).getTime());
+  assert.equal(logic.dayStart('GSB', at(23)), new Date(2026, 9, 14, 23, 0).getTime());
+  assert.equal(logic.dayStart('', at(0)), new Date(2026, 9, 14, 0, 0).getTime());
+
+  const spent = { own: 99500, other: 40000 };
+  // Two caps: each is its own.
+  const two = { bankCode: 'GSB', cap: 100000, capOwn: 100000 };
+  assert.equal(logic.capShort(two, spent, 500, 'GSB'), '');
+  assert.equal(logic.capShort(two, spent, 501, 'GSB'), 'capown');
+  assert.equal(logic.capShort(two, spent, 60000, 'KBANK'), '');
+  assert.equal(logic.capShort(two, spent, 60001, 'KBANK'), 'capother');
+  assert.equal(logic.capShort({ ...two, cap: null }, spent, 999999, 'KBANK'), '');
+  // One cap for everything: a bank's account with no limit of its own for the bank, and every other bank.
+  const one = { bankCode: 'GSB', cap: 140000, capOwn: null };
+  assert.equal(logic.capShort(one, spent, 500, 'GSB'), '');
+  assert.equal(logic.capShort(one, spent, 501, 'KBANK'), 'cap');
+  assert.equal(logic.capShort({ bankCode: 'BBL', cap: 140000, capOwn: 5 }, spent, 500, 'BBL'), '');
+  assert.equal(logic.capShort({ bankCode: 'BBL', cap: 140000, capOwn: 5 }, spent, 501, 'BBL'), 'cap');
+  assert.equal(logic.capShort({ bankCode: 'BBL', cap: null, capOwn: null }, spent, 1e9, 'KBANK'), '');
+});

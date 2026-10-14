@@ -631,6 +631,8 @@ function createJobs(host) {
       stops: stops(),
       paying: Object.fromEntries(paying),
       phones: host.phones().map((phone) => ({ ...phone, spent: spentToday(phone.serial) })),
+      // What each phone has paid since its bank's day began, to its own bank and to others, for its daily caps.
+      caps: Object.fromEntries([...new Set(Object.values(ledger).map((entry) => entry.serial).filter(Boolean))].map((serial) => [serial, spentBy(serial, host.payBank ? host.payBank(serial) : '')])),
       // The phones whose account has not been read from the back office since they came online.
       checking: host.watched().filter(checking).map((phone) => phone.serial),
       // The banks no phone pays to for now, by code.
@@ -1172,7 +1174,16 @@ function createJobs(host) {
   // here: only rows of today count (see spentToday). This turn of the clock just says so and
   // draws the window again, so a phone at its cap is seen to be free without waiting for a job.
   let dayNow = new Date().toDateString();
+  // The hours at which some bank starts its day apart from midnight, and the one each was last seen in.
+  const turns = Object.fromEntries(Object.keys(logic.DAY_TURN_HOUR).map((code) => [code, logic.dayStart(code)]));
   setInterval(() => {
+    for (const code of Object.keys(turns)) {
+      if (logic.dayStart(code) === turns[code]) continue;
+      turns[code] = logic.dayStart(code);
+      audit('newday', '', { message: `เพดานต่อวันของเครื่อง ${code} เริ่มนับใหม่` });
+      host.log(`The daily caps of ${code} phones count from zero again.`);
+      publish();
+    }
     const day = new Date().toDateString();
     if (day === dayNow) return;
     dayNow = day;
@@ -1221,9 +1232,12 @@ function createJobs(host) {
     const value = Number(order.amount);
     const code = logic.bankCode(order.bank);
     if (unlistedBank(order)) return null;
-    const able = host.phones().filter((phone) => phone.min !== null && phone.max !== null && value >= phone.min && value <= phone.max && !skips(phone, code) && !shortOf(phone, value) && !(free && paying.has(phone.serial)));
-    // The phone that has waited longest takes the row, so the work is shared out.
-    able.sort((a, b) => (lastTaken.get(a.serial) || 0) - (lastTaken.get(b.serial) || 0));
+    const able = host.phones().filter((phone) => phone.min !== null && phone.max !== null && value >= phone.min && value <= phone.max && !skips(phone, code) && !shortOf(phone, value, code) && !(free && paying.has(phone.serial)));
+    // A row to a bank that limits transfers within itself apart goes first to a phone of that
+    // bank with a cap of its own for them: what the phones may send to other banks is spared.
+    const within = (phone) => (logic.OWN_LIMIT_BANKS.includes(code) && logic.bankCode(phone.bank) === code && phone.capOwn !== null ? 0 : 1);
+    // Then the phone that has waited longest takes the row, so the work is shared out.
+    able.sort((a, b) => within(a) - within(b) || (lastTaken.get(a.serial) || 0) - (lastTaken.get(b.serial) || 0));
     return able[0] || null;
   }
 
@@ -1234,7 +1248,8 @@ function createJobs(host) {
     const code = logic.bankCode(order.bank);
     const inRange = host.phones().filter((each) => each.min !== null && value >= each.min && value <= each.max);
     const willing = inRange.find((each) => !skips(each, code));
-    if (willing) return shortOf(willing, value);
+    // A phone that could take the row but for a cap is not the answer when another one takes it without.
+    if (willing) return shortOf(willing, value, code);
     // Every phone that takes this amount passes over the bank, or the bank is passed over by all.
     return inRange.length || host.skipBanks().includes(code) ? 'skipbank' : '';
   }
@@ -1483,6 +1498,26 @@ function createJobs(host) {
     return Object.values(ledger).filter((entry) => entry.serial === serial && slipOf(entry) && new Date(entry.at).toDateString() === today).reduce((sum, entry) => sum + Number(entry.amount), 0);
   }
 
+  /**
+   * What a phone has paid since its bank's day began, apart for its own bank and for other banks:
+   * { own, other, since }. Only rows with a slip count. A daily cap is measured against this.
+   */
+  function spentBy(serial, bank) {
+    const code = logic.bankCode(bank);
+    const since = logic.dayStart(code);
+    const spent = { own: 0, other: 0, since };
+    for (const entry of Object.values(ledger)) {
+      if (entry.serial !== serial || !slipOf(entry) || Date.parse(entry.at) < since) continue;
+      spent[code && logic.bankCode(entry.bank) === code ? 'own' : 'other'] += Number(entry.amount) || 0;
+    }
+    return spent;
+  }
+
+  /** Which of a phone's daily caps a payment to the bank `toCode` would go over, or ''. */
+  function capOf(phone, value, toCode) {
+    return logic.capShort({ bankCode: logic.bankCode(phone.bank), cap: phone.cap, capOwn: phone.capOwn }, spentBy(phone.serial, phone.bank), value, toCode);
+  }
+
   /** What a phone's account holds, as far as is known: the back office's figure, else the one entered by hand. */
   function balanceOf(phone) {
     const listed = accountOf(phone);
@@ -1548,13 +1583,14 @@ function createJobs(host) {
     return Boolean(current.bank) && Boolean(code) && code !== current.bank && !current.flows[code];
   }
 
-  function shortOf(phone, value) {
+  function shortOf(phone, value, toCode) {
     if (stops()[phone.serial]) return 'stopped';
     if (checking(phone)) return 'checking';
     if (noFlow(config(), phone)) return 'noflow';
     // An account the back office does not list cannot be seen to be on, and a row paid from it could not be closed.
     if (unlisted(phone)) return 'missing';
-    if (phone.cap !== null && spentToday(phone.serial) + value > phone.cap) return 'cap';
+    const over = capOf(phone, value, toCode);
+    if (over) return over;
     const listed = accountOf(phone);
     // Switched off in the back office, an account is not offered on the close-job form: a row paid from it could not be closed.
     if (listed && listed.on === false) return 'off';

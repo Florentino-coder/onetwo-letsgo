@@ -644,6 +644,34 @@ function parseWithdrawRow(cells) {
 }
 
 // A time from the back office's own request, as its page shows it: Thai time, day first.
+// Banks that give an account one daily limit for transfers within the bank and another for
+// transfers to other banks. Every other bank has one limit for both.
+const OWN_LIMIT_BANKS = ['GSB'];
+// The hour, by this computer's clock, at which a bank starts its daily limits again. Midnight when not named.
+const DAY_TURN_HOUR = { GSB: 23 };
+
+/** When the day that a bank's limits count by began, as of `now`: a time in milliseconds. */
+function dayStart(bankCode, now = Date.now()) {
+  const at = new Date(now);
+  const start = new Date(at.getFullYear(), at.getMonth(), at.getDate(), DAY_TURN_HOUR[bankCode] || 0, 0, 0, 0);
+  if (start.getTime() > now) start.setDate(start.getDate() - 1);
+  return start.getTime();
+}
+
+/**
+ * Which daily cap of a phone a payment of `value` to the bank `toCode` would go over, given what
+ * the phone has paid since its bank's day began: 'capown' the cap for its own bank, 'capother' the
+ * cap for other banks, 'cap' its one cap for everything, or '' when it goes over none.
+ * `phone` is { bankCode, cap, capOwn }; `spent` is { own, other }. A phone has two caps only when
+ * its bank limits the two apart and a cap for its own bank is set; else `cap` is for everything.
+ */
+function capShort(phone, spent, value, toCode) {
+  const split = OWN_LIMIT_BANKS.includes(phone.bankCode) && phone.capOwn !== null && phone.capOwn !== undefined;
+  if (!split) return phone.cap !== null && phone.cap !== undefined && spent.own + spent.other + value > phone.cap ? 'cap' : '';
+  if (toCode === phone.bankCode) return spent.own + value > phone.capOwn ? 'capown' : '';
+  return phone.cap !== null && phone.cap !== undefined && spent.other + value > phone.cap ? 'capother' : '';
+}
+
 /** When a row's "DD/MM/YYYY HH:MM:SS" is, as a number that grows with time; 0 when it is not such a time. */
 function rowTime(text) {
   const [, day, month, year, hour, minute, second] = String(text || '').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/) || [];
@@ -1114,6 +1142,10 @@ module.exports = {
   screenShows,
   verifyScreen,
   parseSlip,
+  OWN_LIMIT_BANKS,
+  DAY_TURN_HOUR,
+  dayStart,
+  capShort,
   oldestFirst,
   slipDigits,
   endsAgree,

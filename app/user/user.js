@@ -178,6 +178,12 @@ function bankMark(code, big) {
 /** The code of the bank a phone pays from; a phone set up before there was a choice pays from the first bank. */
 const phoneBank = (device) => ((S.state.banks || []).find((bank) => bank.name === device.pay.bank) || { code: (S.state.jobs.payBanks || [])[0] || 'BBL' }).code;
 
+/** True for a bank that limits transfers within itself apart from those to other banks; by the bank's name. */
+const twoCaps = (bankName) => {
+  const bank = (S.state.banks || []).find((each) => each.name === bankName);
+  return Boolean(bank) && (S.state.ownLimitBanks || []).includes(bank.code);
+};
+
 /** A state as a pill: 'ok' ready, 'run' at work, 'warn' passed over, 'bad' to be looked at, 'wait' idle. */
 const pill = (text, kind, title) => h('span', { class: `pill ${kind || 'wait'}`, title }, text);
 const rangeText = (min, max) => `${whole(min)}–${whole(max)}`;
@@ -227,8 +233,12 @@ function phoneView(device) {
   else if (!device.payOn || (listed && listed.on === false)) word = ['ปิดอยู่', 'wait'];
   else if (jobs.accounts.fresh && !listed) word = ['ไม่พบบัญชีในหลังบ้าน', 'bad'];
   else if (balance !== null && balance < device.amountMin) word = ['เงินหมด', 'bad'];
-  else if (device.pay.cap !== null && spent >= device.pay.cap) word = ['ถึงเพดาน', 'wait'];
-  return { device, balance, spent, stop, word, ready: word[0] === 'พร้อม' || Boolean(working) };
+  // A phone with a cap for its own bank and one for others is at its cap only when both are used up.
+  const caps = jobs.caps && jobs.caps[device.serial] ? jobs.caps[device.serial] : { own: 0, other: 0 };
+  const split = twoCaps(device.pay.bank) && device.pay.capOwn !== null && device.pay.capOwn !== undefined;
+  const full = split ? caps.own >= device.pay.capOwn && device.pay.cap !== null && caps.other >= device.pay.cap : device.pay.cap !== null && caps.own + caps.other >= device.pay.cap;
+  if (word[0] === 'พร้อม' && full) word = ['ถึงเพดาน', 'wait'];
+  return { device, balance, spent, caps, split, stop, word, ready: word[0] === 'พร้อม' || Boolean(working) };
 }
 
 /** In link mode a pass held is "signed in"; otherwise the back-office window must be signed in. */
@@ -364,12 +374,16 @@ function home() {
       // The mark of the bank whose app the phone pays from, once its account is set.
       h('span', { class: 'top' }, device.pay.account ? bankMark(phoneBank(device)) : null, h('span', { class: 'nm' }, device.label), pill(view.word[0], view.word[1])),
       h('span', { class: 'c' }, [tail(device.pay.account), view.balance !== null ? `คงเหลือ ${whole(view.balance)}` : '', device.amountMin !== null ? `ยอด ${rangeText(device.amountMin, device.amountMax)}` : ''].filter(Boolean).join(' · ')),
+      // What is used of each daily cap, for a phone with two.
+      view.split ? h('span', { class: 'c', title: 'ที่จ่ายไปแล้วของเพดานต่อวันแต่ละก้อน' }, `ในธนาคาร ${whole(view.caps.own)}/${whole(device.pay.capOwn)} · ต่างธนาคาร ${whole(view.caps.other)}/${device.pay.cap !== null ? whole(device.pay.cap) : 'ไม่จำกัด'}`) : null,
       extra ? h('span', { class: `c ${device.drops >= 3 ? 'bad' : 'warn'}`, title: 'ธนาคารที่เครื่องนี้ข้าม และจำนวนครั้งที่เครื่องหลุดการเชื่อมต่อใน 1 ชั่วโมงที่ผ่านมา' }, extra) : null);
   };
 
   // Why no phone takes a row: a few words for the pill, the whole of it for the pointer.
   const WHY = {
-    cap: ['ถึงเพดาน', 'wait', 'เครื่องที่รับยอดนี้ถึงเพดานต่อวันแล้ว'], balance: ['เงินไม่พอ', 'wait', 'เงินในเครื่องที่รับยอดนี้ไม่พอ'],
+    cap: ['ถึงเพดาน', 'wait', 'เครื่องที่รับยอดนี้ถึงเพดานต่อวันแล้ว'],
+    capown: ['ถึงเพดานธนาคารเดียวกัน', 'wait', 'เครื่องที่รับยอดนี้ถึงเพดานต่อวันของการโอนภายในธนาคารแล้ว'],
+    capother: ['ถึงเพดานต่างธนาคาร', 'wait', 'เครื่องที่รับยอดนี้ถึงเพดานต่อวันของการโอนต่างธนาคารแล้ว'], balance: ['เงินไม่พอ', 'wait', 'เงินในเครื่องที่รับยอดนี้ไม่พอ'],
     off: ['บัญชีปิดอยู่', 'wait', 'บัญชีของเครื่องที่รับยอดนี้ปิดอยู่'], stopped: ['เครื่องหยุด', 'bad', 'เครื่องที่รับยอดนี้หยุดอยู่ รอตรวจและรีเซ็ต'],
     noflow: ['ไม่มีชุดงาน', 'bad', 'ชุดงานไม่มีเวิร์กโฟลว์ของแอปธนาคารที่เครื่องนี้ใช้'],
     checking: ['กำลังตรวจสอบ', 'run', 'เครื่องที่รับยอดนี้เพิ่งเสียบสาย กำลังตรวจสอบ'], missing: ['ไม่พบบัญชี', 'bad', 'ไม่พบบัญชีของเครื่องในหลังบ้าน'],
@@ -645,6 +659,19 @@ function openPhone(serial) {
   const payBanks = (S.state.jobs.payBanks || []).map((code) => (S.state.banks || []).find((bank) => bank.code === code)).filter(Boolean);
   // A phone set up before there was a choice pays from the first bank.
   const ownBank = (payBanks.find((bank) => bank.name === device.pay.bank) || payBanks[0] || { name: BANK }).name;
+  // The daily caps: one for most banks, two for a bank that limits transfers within itself apart.
+  // Drawn again when another bank is chosen, with what was typed kept.
+  const capFields = (bankName, cap, capOwn) => {
+    const two = twoCaps(bankName);
+    const hour = (S.state.dayTurnHour || {})[((S.state.banks || []).find((each) => each.name === bankName) || {}).code];
+    return h('div', { id: 'phone-caps' },
+      h('div', { class: 'grid' },
+        field(two ? 'เพดานโอนต่างธนาคาร ต่อวัน' : 'เพดานต่อวัน', h('input', { class: 'inp', id: 'phone-cap', type: 'number', min: 0, placeholder: 'ไม่จำกัด', value: cap })),
+        two ? field('เพดานโอนภายในธนาคาร ต่อวัน', h('input', { class: 'inp', id: 'phone-cap-own', type: 'number', min: 0, placeholder: 'นับรวมกับต่างธนาคาร', value: capOwn })) : null),
+      h('div', { class: 'hint' }, two
+        ? `บัญชีที่ธนาคารให้วงเงินสองก้อน ใส่ทั้งสองช่อง บัญชีที่มีวงเงินก้อนเดียว ใส่ช่องแรกช่องเดียว โปรแกรมจะนับทุกรายการรวมกัน เริ่มนับใหม่ทุกวัน ${String(hour || 0).padStart(2, '0')}:00`
+        : 'ยอดรวมสูงสุดที่ให้เครื่องนี้จ่ายต่อวัน เริ่มนับใหม่ทุกเที่ยงคืน เว้นว่างได้'));
+  };
   // The mark at the head of the window is the chosen bank's, and follows the choice.
   const headMark = (name) => {
     const mark = bankMark((payBanks.find((bank) => bank.name === name) || { code: phoneBank(device) }).code, true);
@@ -655,7 +682,7 @@ function openPhone(serial) {
     const value = (id) => $(id).value.trim();
     const calls = [
       ['device:meta', { serial, name: value('phone-name'), group: device.group, slot: device.slot }],
-      ['device:account', { serial, bank: $('phone-bank') ? $('phone-bank').value : device.pay.bank || BANK, account: value('phone-account'), holder: value('phone-holder'), cap: value('phone-cap'), balance: value('phone-balance'), scale: value('phone-speed') }],
+      ['device:account', { serial, bank: $('phone-bank') ? $('phone-bank').value : device.pay.bank || BANK, account: value('phone-account'), holder: value('phone-holder'), cap: value('phone-cap'), capOwn: $('phone-cap-own') ? value('phone-cap-own') : '', balance: value('phone-balance'), scale: value('phone-speed') }],
       ['device:range', { serial, min: value('phone-min'), max: value('phone-max') }],
     ];
     calls.push(['device:skip', { serial, codes: skip }]);
@@ -693,7 +720,7 @@ function openPhone(serial) {
             h('input', { class: 'inp', id: 'phone-pin', type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: device.hasPin ? '••••••' : '' }),
             eyeButton('phone-pin', device.hasPin ? serial : ''))),
           // The bank is chosen only when the work pack drives more than one bank's app.
-          payBanks.length > 1 ? field('แอปธนาคารของเครื่อง', h('select', { class: 'inp plain', id: 'phone-bank', onchange: (event) => $('phone-mark').replaceWith(headMark(event.target.value)) }, payBanks.map((bank) => h('option', { value: bank.name, selected: bank.name === ownBank }, bank.name)))) : null,
+          payBanks.length > 1 ? field('แอปธนาคารของเครื่อง', h('select', { class: 'inp plain', id: 'phone-bank', onchange: (event) => { $('phone-mark').replaceWith(headMark(event.target.value)); $('phone-caps').replaceWith(capFields(event.target.value, $('phone-cap').value, $('phone-cap-own') ? $('phone-cap-own').value : '')); } }, payBanks.map((bank) => h('option', { value: bank.name, selected: bank.name === ownBank }, bank.name)))) : null,
           field(payBanks.length > 1 ? 'เลขบัญชีของเครื่อง' : `เลขบัญชี ${BANK} ของเครื่อง`, h('input', { class: 'inp', id: 'phone-account', value: device.pay.account, inputmode: 'numeric' })),
           field('ชื่อบัญชี', h('input', { class: 'inp plain', id: 'phone-holder', value: device.pay.holder }))),
         h('div', { class: 'hint' }, listed && listed.balance !== null ? `หลังบ้าน: คงเหลือ ${money(listed.balance)} · อ่านเมื่อ ${timeOf(jobs.accounts.at)}` : 'หลังบ้านยังไม่แสดงยอดของบัญชีนี้ โปรแกรมใช้ยอดที่ใส่เองด้านล่าง'),
@@ -701,8 +728,8 @@ function openPhone(serial) {
         h('div', { class: 'grid four' },
           field('ยอดต่ำสุด', h('input', { class: 'inp', id: 'phone-min', type: 'number', min: 1, value: device.amountMin ?? '' })),
           field('ยอดสูงสุด', h('input', { class: 'inp', id: 'phone-max', type: 'number', min: 1, value: device.amountMax ?? '' })),
-          field('เพดานต่อวัน', h('input', { class: 'inp', id: 'phone-cap', type: 'number', min: 0, placeholder: 'ไม่จำกัด', value: device.pay.cap ?? '' })),
           field('ยอดคงเหลือ (ใส่เอง)', h('input', { class: 'inp', id: 'phone-balance', type: 'number', min: 0, placeholder: 'ใช้ของหลังบ้าน', value: device.pay.balance ?? '' }))),
+        capFields(ownBank, device.pay.cap ?? '', device.pay.capOwn ?? ''),
         field('ความเร็วของเครื่องนี้', h('select', { class: 'inp plain', id: 'phone-speed' }, SPEEDS.map(([scale, name]) => h('option', { value: scale, selected: scale === speed }, name)))),
         h('div', { class: 'hint' }, 'เริ่มที่ "ปกติ" ก่อน เร่งทีละขั้นเมื่อจ่ายได้นิ่งแล้ว ถ้าเครื่องแตะพลาดหรือหน้าจอโหลดไม่ทัน ให้ลดความเร็วลง'),
         h('div', { class: 'h gap' }, 'ธนาคารที่เครื่องนี้ข้าม'),

@@ -244,6 +244,7 @@ const jobs = createJobs({
   phoneClock: (serial) => requireAdb().clock(serial),
   phones: () => [...devices.values()].filter((device) => device.status === 'device' && deviceMeta(device.serial).pay_on !== false).map((device) => ({ serial: device.serial, label: deviceLabel(device), since: device.onlineSince || 0, skip: skipBanks(deviceMeta(device.serial).skip_banks), ...amountRange(device.serial), ...payAccount(device.serial) })),
   // Every online phone that has an account, switched on or not, with when it came online.
+  payBank: (serial) => payAccount(serial).bank,
   watched: () => [...devices.values()].filter((device) => device.status === 'device' && payAccount(device.serial).account).map((device) => ({ serial: device.serial, account: payAccount(device.serial).account, since: device.onlineSince || 0 })),
   // The back office says which accounts are on: every phone stands the way its account stands there.
   accountStates: (map) => {
@@ -363,6 +364,8 @@ function payAccount(serial) {
     account: typeof meta.pay_account === 'string' ? meta.pay_account : '',
     holder: typeof meta.pay_holder === 'string' ? meta.pay_holder : '',
     cap: number(meta.day_cap),
+    // The cap for transfers within the phone's own bank, where that bank limits them apart.
+    capOwn: number(meta.day_cap_own),
     balance: number(meta.balance),
     scale: Number.isFinite(meta.wait_scale) && meta.wait_scale >= 0.5 && meta.wait_scale <= 5 ? meta.wait_scale : 1,
   };
@@ -1307,6 +1310,9 @@ function publicState() {
     groupProfiles: store.state.group_live_profiles,
     profiles: logic.SCRCPY_PROFILES,
     banks: logic.BANKS,
+    // Banks with a daily limit of their own for transfers within the bank, and the hour each bank's day begins.
+    ownLimitBanks: logic.OWN_LIMIT_BANKS,
+    dayTurnHour: logic.DAY_TURN_HOUR,
     logs,
   };
 }
@@ -1416,7 +1422,7 @@ function registerIpc() {
   });
 
   // The account this phone pays from, its daily cap, what is left in it, and how slow the phone is.
-  handle('device:account', ({ serial, bank, account, holder, cap, balance, scale }) => {
+  handle('device:account', ({ serial, bank, account, holder, cap, capOwn, balance, scale }) => {
     if (!devices.has(serial)) throw new Error('Select a device first.');
     const digits = String(account || '').replace(/[\s-]/g, '');
     if (digits && !/^\d{6,20}$/.test(digits)) throw new Error('An account number is 6 to 20 digits.');
@@ -1429,7 +1435,9 @@ function registerIpc() {
     const speed = String(scale ?? '').trim() === '' ? 1 : Number(scale);
     if (!(speed >= 0.5 && speed <= 5)) throw new Error('The wait multiplier is between 0.5 and 5.');
     const meta = { ...deviceMeta(serial), pay_bank: String(bank || '').trim().slice(0, 60), pay_account: digits, pay_holder: String(holder || '').trim().slice(0, 80), wait_scale: speed };
-    for (const [key, value] of [['day_cap', amount(cap, 'The daily cap')], ['balance', amount(balance, 'The balance')]]) {
+    // A cap for its own bank is kept only for a phone whose bank limits those transfers apart.
+    const own = logic.OWN_LIMIT_BANKS.includes(logic.bankCode(meta.pay_bank)) ? amount(capOwn, 'The daily cap for the same bank') : undefined;
+    for (const [key, value] of [['day_cap', amount(cap, 'The daily cap')], ['day_cap_own', own], ['balance', amount(balance, 'The balance')]]) {
       if (value === undefined) delete meta[key];
       else meta[key] = value;
     }
